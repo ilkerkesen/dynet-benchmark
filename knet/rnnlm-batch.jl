@@ -31,7 +31,9 @@ function main(args)
     atype = o[:gpu] ? KnetArray{Float32} : Float32
 
     # build data
-    trn, tst, w2i = build_data(o[:train], o[:test])
+    w2i = Dict()
+    trn = read_data(o[:train], w2i)
+    tst = read_data(o[:test], w2i)
     sort!(trn, by=length, rev=true)
     sort!(tst, by=length, rev=true)
     trn, tst = map(split->make_batches(split, w2i, o[:MB_SIZE]), [trn, tst])
@@ -39,13 +41,8 @@ function main(args)
     # build model
     w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), o[:EMBED_SIZE])
     s0 = initstate(atype, o[:HIDDEN_SIZE], o[:MB_SIZE])
-    s1, s2 = s0, s0
-    if size(trn[end][1][1],1) != size(trn[end-1][1][1],1)
-        s1 = initstate(atype, o[:HIDDEN_SIZE], size(trn[end][1][1],1))
-    end
-    if size(tst[end][1][1],1) != size(tst[end-1][1][1],1)
-        s2 = initstate(atype, o[:HIDDEN_SIZE], size(tst[end][1][1],1))
-    end
+    s1 = initstate(atype, o[:HIDDEN_SIZE], size(trn[end][1][1],1))
+    s2 = initstate(atype, o[:HIDDEN_SIZE], size(tst[end][1][1],1))
     opt = initopt(w)
 
     # train language model
@@ -93,26 +90,23 @@ function main(args)
 end
 
 # build vocabulary, training and test data
-function build_data(trnfile, tstfile)
-    w2i = Dict()
+function read_data(file, w2i)
     get_tokens(line) = [SOS; split(line, " ")[2:end-1]]
-    trn = open(trnfile, "r") do f; map(get_tokens, readlines(f)); end
-    tst = open(tstfile, "r") do f; map(get_tokens, readlines(f)); end
-    data1, data2 = [trn; tst], []
-    len = length(trn); empty!(trn); empty!(tst)
-    counter = 1
-    for k = 1:length(data1)
-        senvec = []
-        for t = 1:length(data1[k])
-            if !haskey(w2i, data1[k][t])
-                w2i[data1[k][t]] = counter
-                counter += 1
+    data = open(file, "r") do f
+        data = []
+        for ln in readlines(f)
+            words = get_tokens(ln)
+            senvec = []
+            for word in words
+                if !haskey(w2i, word)
+                    w2i[word] = length(w2i)+1
+                end
+                push!(senvec, w2i[word])
             end
-            push!(senvec, w2i[data1[k][t]])
+            push!(data, senvec)
         end
-        push!(data2, senvec)
+        data
     end
-    return data2[1:len], data2[len+1:end], w2i
 end
 
 # make minibatches
@@ -150,6 +144,7 @@ function initweights(atype, hidden, vocab, embed, winit=0.01)
     input = embed
     w[1] = winit*randn(input+hidden, 4*hidden)
     w[2] = zeros(1, 4*hidden)
+    w[2][1:hidden] = 1 # forget gate bias
     w[3] = winit*randn(hidden, vocab)
     w[4] = zeros(1, vocab)
     w[5] = winit*randn(vocab, embed)
