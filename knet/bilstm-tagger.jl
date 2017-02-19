@@ -47,11 +47,13 @@ function main(args)
 
     # count words and build vocabulary
     wordcounts = count_words(words)
+    nwords = length(wordcounts)+1
     wordcounts = filter((w,c)-> c >= o[:minoccur], wordcounts)
     words = collect(keys(wordcounts))
     !in(UNK, words) && push!(words, UNK)
     w2i, i2w = build_vocabulary(words)
     t2i, i2t = build_vocabulary(tags)
+    ntags = length(t2i)
     !haskey(w2i, UNK) && error("...")
 
     # build model
@@ -60,11 +62,8 @@ function main(args)
     s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
     opt = initopt(w)
 
-    # gradcheck
-    seq,out,nwords=  make_input(w2i)
-    gradcheck(loss, w, copy(s), )
-
     # train bilstm tagger
+    println("nwords=$nwords, ntags=$ntags"); flush(STDOUT)
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
     t0 = now()
     all_time = dev_time = all_tagged = this_tagged = this_loss = 0
@@ -96,7 +95,7 @@ function main(args)
                             same = false
                         end
                     end
-                    if !same
+                    if same
                         good_sent += 1
                     else
                         bad_sent += 1
@@ -125,7 +124,7 @@ end
 
 # parse line
 function parse_line(line)
-    return map(x->split(x,"|"), split(line, " "))
+    return map(x->split(x,"|"), split(replace(line,"\n",""), " "))
 end
 
 # read file
@@ -164,35 +163,11 @@ function make_input(sample, w2i, t2i)
     return (fseq, tags, nwords)
 end
 
-# make minibatches
-function make_batches(data, w2i, t2i, batchsize=1)
-    batches = []
-    for k = 1:batchsize:length(data)
-        samples = data[k:min(k+batchsize-1, length(data))]
-        samples = map(
-            s -> map(x -> (get(w2i,x[1],w2i[UNK]), t2i[x[2]]), s), samples)
-        lengths = map(length, samples)
-        longest = reduce(max, lengths)
-        nwords = sum(lengths)
-        nsamples = length(samples)
-        fseq = map(i -> zeros(Cuchar, nsamples, length(w2i)), [1:longest...])
-        tags = map(i -> zeros(Cuchar, nsamples, length(t2i)), [1:longest...])
-        for i = 1:nsamples
-            map!(t->fseq[t][i,samples[i][t][1]] = 1, [1:length(samples[i])...])
-            map!(t->tags[t][i,samples[i][t][2]] = 1, [1:length(samples[i])...])
-        end
-        push!(batches, (fseq, tags, nwords))
-    end
-    return batches
-end
-
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize)
-    state = Array(Any, 4)
+    state = Array(Any, 2)
     state[1] = zeros(batchsize, hidden)
     state[2] = zeros(batchsize, hidden)
-    state[3] = zeros(batchsize, hidden)
-    state[4] = zeros(batchsize, hidden)
     return map(s->convert(atype,s), state)
 end
 
@@ -260,21 +235,25 @@ function encoder(w,s,seq)
     atype = typeof(AutoGrad.getval(w[1]))
 
     # states and state histories
-    sf,sb = s[1:2], s[3:4]
+    sf, sb = copy(s), copy(s)
     sfs = Array(Any, length(seq))
     sbs = Array(Any, length(seq))
+
+    # embedding
+    embed = Array(Any, length(seq))
+    for k = 1:length(seq)
+        embed[k] = convert(atype, seq[k]) * w[9]
+    end
 
     # encoding
     rng = 1:length(seq)
     for (ft,bt) in zip(rng,reverse(rng))
         # forward LSTM
-        x = convert(atype, seq[ft]) * w[9]
-        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],x)
+        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],embed[ft])
         sfs[ft] = copy(sf[1])
 
         # backward LSTM
-        x = convert(atype, seq[bt]) * w[9]
-        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],x)
+        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],embed[bt])
         sbs[bt] = copy(sb[1])
     end
 
