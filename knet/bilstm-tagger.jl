@@ -270,15 +270,12 @@ function encoder(w,s,seq)
         # forward LSTM
         x = convert(atype, seq[ft]) * w[9]
         (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],x)
-        # push!(sfs, sf[1])
-        push!(sfs, copy(sf[1]))
-        # sfs[ft] = copy(sf[1])
+        sfs[ft] = copy(sf[1])
 
         # backward LSTM
         x = convert(atype, seq[bt]) * w[9]
         (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],x)
-        unshift!(sbs, copy(sb[1]))
-        # sbs[bt] = copy(sb[1])
+        sbs[bt] = copy(sb[1])
     end
 
     (sfs, sbs)
