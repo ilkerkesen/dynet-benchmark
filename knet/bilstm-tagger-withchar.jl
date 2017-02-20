@@ -5,7 +5,7 @@ using ArgParse
 const train_file = "data/tags/train.txt"
 const test_file = "data/tags/dev.txt"
 const UNK = "_UNK_"
-const PAD = ""
+const PAD = "<*>"
 t00 = now()
 
 function main(args)
@@ -41,16 +41,26 @@ function main(args)
     words, tags, chars = [], [], Set()
     for sample in trn
         for (word,tag) in sample
+            word = String(word)
             push!(words, word)
             push!(tags, tag)
-            push!(chars, split(word,"")...)
+            push!(chars, convert(Array{UInt8,1}, word)...)
+            # for k = 1:length(word)
+            #     try
+            #         if !in(word[k],chars)
+            #             push!(chars, string(word[k]))
+            #             # println(string(word[k]))
+            #         end
+            #     catch
+            #     end
+            # end
         end
     end
     chars = collect(chars)
 
     # count words and build vocabulary
     wordcounts = count_words(words)
-    nwords = length(wordcounts)
+    nwords = length(wordcounts) + 1 # for UNK
     wordcounts = filter((w,c)-> c >= o[:minoccur], wordcounts)
     words = collect(keys(wordcounts))
     push!(chars, PAD)
@@ -100,7 +110,7 @@ function main(args)
                             same = false
                         end
                     end
-                    if !same
+                    if same
                         good_sent += 1
                     else
                         bad_sent += 1
@@ -169,7 +179,7 @@ function make_input(sample, w2i, c2i)
             onehot[w2i[word]] = 1
             push!(seq, onehot)
         else
-            chars = [PAD; split(word,""); PAD]
+            chars = [PAD; convert(Array{UInt8,1}, word); PAD]
             charseq = []
             for char in chars
                 onehot = zeros(Cuchar, 1, length(c2i))
@@ -335,8 +345,8 @@ function predict(w,s,seq,is_word)
     atype = typeof(AutoGrad.getval(w[1]))
     rng = 1:length(seq)
     for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
-        ypred = x * w[7] .+ w[8]
+        x = hcat(sfs[t], sbs[t]) * w[9] .+ w[10]
+        ypred = x * w[11] .+ w[12]
         ypred = convert(Array{Float32}, ypred)[:]
         push!(tags, indmax(ypred))
     end
