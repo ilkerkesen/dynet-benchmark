@@ -43,7 +43,7 @@ function main(args)
         for (word,tag) in sample
             push!(words, word)
             push!(tags, tag)
-            push!(chars, word...)
+            push!(chars, split(word,"")...)
         end
     end
     chars = collect(chars)
@@ -87,7 +87,8 @@ function main(args)
                 dev_start = now()
                 good_sent = bad_sent = good = bad = 0.0
                 for sample in tst
-                    ypred = predict(w, copy(s), sample, w2i, c2i)
+                    seq, is_word = make_input(sample, w2i, c2i)
+                    ypred = predict(w, copy(s), seq, is_word)
                     ypred = map(x->i2t[x], ypred)
                     ygold = map(x -> x[2], sample)
                     same = true
@@ -117,7 +118,9 @@ function main(args)
             end
 
             # train with instance
-            batch_loss = train!(w,s,trn[k],w2i,c2i,t2i,opt)
+            seq, is_word = make_input(trn[k],w2i,c2i)
+            out = make_output(trn[k],t2i)
+            batch_loss = train!(w,s,seq,is_word,out,opt)
             this_loss += batch_loss
             this_tagged += length(trn[k])
         end
@@ -154,6 +157,41 @@ function build_vocabulary(words)
         i2w[i] = word
     end
     w2i, i2w
+end
+
+function make_input(sample, w2i, c2i)
+    seq, is_word = [], []
+    words = map(x->x[1], sample)
+    for word in words
+        push!(is_word, haskey(w2i, word))
+        if is_word[end]
+            onehot = zeros(Cuchar, 1, length(w2i))
+            onehot[w2i[word]] = 1
+            push!(seq, onehot)
+        else
+            chars = [PAD; split(word,""); PAD]
+            charseq = []
+            for char in chars
+                onehot = zeros(Cuchar, 1, length(c2i))
+                onehot[c2i[char]] = 1
+                push!(charseq, onehot)
+            end
+            push!(seq, charseq)
+        end
+    end
+
+    (seq,is_word)
+end
+
+function make_output(sample,t2i)
+    seq = []
+    tags = map(x->x[2], sample)
+    for tag in tags
+        onehot = zeros(Cuchar, 1, length(t2i))
+        onehot[t2i[tag]] = 1
+        push!(seq, onehot)
+    end
+    seq
 end
 
 # initialize hidden and cell arrays
@@ -216,9 +254,9 @@ function lstm(weight, bias, hidden, cell, input)
 end
 
 # loss function
-function loss(w, s, seq, w2i, c2i, t2i, values=[])
+function loss(w, s, seq, is_word, out, values=[])
     # encoder
-    sfs, sbs = encoder(w,s,seq,w2i,c2i)
+    sfs, sbs = encoder(w,s,seq,is_word)
 
     # prediction
     atype = typeof(AutoGrad.getval(w[1]))
@@ -228,9 +266,8 @@ function loss(w, s, seq, w2i, c2i, t2i, values=[])
         x = hcat(sfs[t], sbs[t]) * w[9] .+ w[10]
         ypred = x * w[11] .+ w[12]
         ynorm = logp(ypred,2)
-        ygold = zeros(Cuchar, size(ynorm)); ygold[t2i[seq[t][2]]] = 1
-        ygold = convert(atype, ygold)
-        total += sum(ynorm .* ygold)
+        ygold = convert(atype, out[t])
+        total += sum(ygold .* ynorm)
     end
 
     push!(values, AutoGrad.getval(-total))
@@ -238,38 +275,26 @@ function loss(w, s, seq, w2i, c2i, t2i, values=[])
 end
 
 # bilstm encoder
-function encoder(w,s,seq,w2i,c2i)
+function encoder(w,s,seq,is_word)
     atype = typeof(AutoGrad.getval(w[1]))
 
     # embedding
     embed = Array(Any, length(seq))
     for k = 1:length(seq)
-        word = seq[k][1]
 
         # word embeddings
-        if haskey(w2i, word)
-            onehot = zeros(Cuchar, 1, length(w2i))
-            onehot[w2i[word]] = 1
-            embed[k] = convert(atype, onehot) * w[end-1]
-            # embed[k] = w[end-1][w2i[word],:]
+        if is_word[k]
+            embed[k] = convert(atype, seq[k]) * w[end-1]
             continue
         end
 
         # char embeddings
-        word = string(PAD,word,PAD)
-        cembed = Array(Any, length(word))
-        for i = 1:length(word)
-            onehot = zeros(Cuchar, 1, length(c2i))
-            char = word[i]
-            ind = Int(get(c2i, char, 0))
-            info("$word,$char,$ind")
-            onehot[ind] = 1
-            cembed[i] = convert(atype, onehot) * w[end]
-            # cembed[i] = w[end][c2i[word[i]],:]
-
+        cembed = Array(Any, length(seq[k]))
+        for i = 1:length(seq[k])
+            cembed[i] = convert(atype, seq[k][i]) * w[end]
         end
 
-        rng = 1:length(word)
+        rng = 1:length(seq[k])
         sf = copy(s[3:4])
         sb = copy(sf)
         for (ft,bt) in zip(rng,reverse(rng))
@@ -301,9 +326,9 @@ function encoder(w,s,seq,w2i,c2i)
 end
 
 # tag given input sentence
-function predict(w,s,seq,w2i,c2i)
+function predict(w,s,seq,is_word)
     # encoder
-    sfs, sbs = encoder(w,s,seq,w2i,c2i)
+    sfs, sbs = encoder(w,s,seq,is_word)
 
     # prediction
     tags = []
@@ -321,10 +346,10 @@ end
 
 lossgradient = grad(loss)
 
-function train!(w,s,seq,w2i,c2i,t2i,opt)
+function train!(w,s,seq,is_word,out,opt)
     # info("hede")
     values = []
-    gloss = lossgradient(w, copy(s), seq, w2i, c2i, t2i, values)
+    gloss = lossgradient(w, copy(s), seq, is_word, out, values)
     for k = 1:length(w)
         gloss[k] != nothing && update!(w[k], gloss[k], opt[k])
     end
