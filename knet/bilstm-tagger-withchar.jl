@@ -45,15 +45,6 @@ function main(args)
             push!(words, word)
             push!(tags, tag)
             push!(chars, convert(Array{UInt8,1}, word)...)
-            # for k = 1:length(word)
-            #     try
-            #         if !in(word[k],chars)
-            #             push!(chars, string(word[k]))
-            #             # println(string(word[k]))
-            #         end
-            #     catch
-            #     end
-            # end
         end
     end
     chars = collect(chars)

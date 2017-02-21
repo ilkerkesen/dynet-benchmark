@@ -35,7 +35,6 @@ function main(args)
     trn = read_file(o[:train])
     tst = read_file(o[:test])
 
-
     # get words and tags from train set
     words, tags = [], []
     for sample in trn
@@ -82,7 +81,8 @@ function main(args)
                 dev_start = now()
                 good_sent = bad_sent = good = bad = 0.0
                 for sent in tst
-                    seq, out, nwords = make_input(sent, w2i, t2i)
+                    seq = make_input(sent, w2i)
+                    nwords = length(sent)
                     ypred = predict(w, copy(s), seq)
                     ypred = map(x->i2t[x], predict(w,copy(s),seq))
                     ygold = map(x -> x[2], sent)
@@ -113,10 +113,12 @@ function main(args)
             end
 
             # train on minibatch
-            seq, out, nwords = make_input(trn[k], w2i, t2i)
+            seq = make_input(trn[k], w2i)
+            out = make_output(trn[k], t2i)
+
             batch_loss = train!(w,s,seq,out,opt)
             this_loss += batch_loss
-            this_tagged += nwords
+            this_tagged += length(trn[k])
         end
         @printf("epoch %d finished\n", epoch-1); flush(STDOUT)
     end
@@ -154,13 +156,19 @@ function build_vocabulary(words)
 end
 
 # make input
-function make_input(sample, w2i, t2i)
+function make_input(sample, w2i)
     nwords = length(sample)
     fseq = map(i -> zeros(Cuchar, 1, length(w2i)), [1:nwords...])
+    map!(t->fseq[t][get(w2i, sample[t][1], w2i[UNK])] = 1, [1:nwords...])
+    return fseq
+end
+
+# make output
+function make_output(sample, t2i)
+    nwords = length(sample)
     tags = map(i -> zeros(Cuchar, 1, length(t2i)), [1:nwords...])
-    map!(t->fseq[t][get(w2i, sample[t][1], w2i["_UNK_"])] = 1, [1:nwords...])
     map!(t->tags[t][t2i[sample[t][2]]] = 1, [1:nwords...])
-    return (fseq, tags, nwords)
+    return tags
 end
 
 # initialize hidden and cell arrays
