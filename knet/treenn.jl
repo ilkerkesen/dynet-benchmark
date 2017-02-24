@@ -2,8 +2,8 @@ using Knet
 using AutoGrad
 using ArgParse
 
-const train_file = "data/tags/train.txt"
-const dev_file = "data/tags/dev.txt"
+const train_file = "data/trees/train.txt"
+const dev_file = "data/trees/dev.txt"
 const UNK = "_UNK_"
 t00 = now()
 
@@ -33,35 +33,19 @@ function main(args)
     trn = read_file(o[:train])
     tst = read_file(o[:dev])
 
-    # get words and tags from train set
-    words, tags = [], []
-    for sample in trn
-        for (word,tag) in sample
-            push!(words, word)
-            push!(tags, tag)
-        end
-    end
-
     # count words and build vocabulary
-    wordcounts = count_words(words)
-    nwords = length(wordcounts)+1
-    wordcounts = filter((w,c)-> c >= o[:minoccur], wordcounts)
-    words = collect(keys(wordcounts))
-    !in(UNK, words) && push!(words, UNK)
-    w2i, i2w = build_vocabulary(words)
-    t2i, i2t = build_vocabulary(tags)
-    ntags = length(t2i)
-    !haskey(w2i, UNK) && error("...")
-
+    l2i, w2i, labels, words = build_vocabs(trn)
+    nwords = length(words); nlabels = length(labels)
     # build model
-    w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
-                    o[:MLP_SIZE], o[:EMBED_SIZE])
-    s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
-    opt = initopt(w)
+    # w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
+    #                 o[:MLP_SIZE], o[:EMBED_SIZE])
+    # s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
+    # opt = initopt(w)
 
     # train bilstm tagger
-    println("nwords=$nwords, ntags=$ntags"); flush(STDOUT)
+    println("nwords=$nwords, nlabels=$nlabels"); flush(STDOUT)
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
+    return;
     t0 = now()
     all_time = dev_time = all_tagged = this_tagged = this_loss = 0
     for epoch = 1:o[:epochs]
@@ -134,7 +118,7 @@ function parse_line(line)
     ln = replace(line, "\n", "")
     tokens = tokenize_sexpr(ln)
     shift!(tokens)
-    return within_bracket(tokens)
+    return within_bracket(tokens)[1]
 end
 
 type Tree
@@ -161,14 +145,30 @@ function pretty(t::Tree)
 end
 
 function leaves(t::Tree)
-    t.children == nothing && return t
-    mapreduce(leaves_iter, vcat, t.children)
+    items = []
+    function helper(subtree)
+        if isleaf(subtree)
+            push!(items, subtree)
+        else
+            for child in subtree.children
+                helper(child)
+            end
+        end
+    end
+    helper(t)
+    return items
 end
 
 function nonterms(t::Tree)
-    if !isleaf(t)
-        return [t; mapreduce(nonterms, vcat, filter(c->!isleaf(c), t.children))]
+    nodes = []
+    function helper(subtree)
+        if !isleaf(subtree)
+            push!(nodes, subtree)
+            map(helper, subtree.children)
+        end
     end
+    helper(t)
+    return nodes
 end
 
 function tokenize_sexpr(sexpr)
@@ -176,39 +176,33 @@ function tokenize_sexpr(sexpr)
     filter(t -> t != " ", matchall(tokker, sexpr))
 end
 
-function within_bracket(tokens)
-    label = shift!(tokens)
+function within_bracket(tokens, state=1)
+    (label, state) = next(tokens, state)
     children = []
-    while !isempty(tokens)
-        token = shift!(tokens)
+    while !done(tokens, state)
+        (token, state) = next(tokens, state)
         if token == "("
-            push!(children, _within_bracket(tokens))
+            (child, state) = within_bracket(tokens, state)
+            push!(children, child)
         elseif token == ")"
-            return Tree(label, children)
+            return Tree(label, children), state
         else
-            push!(children, Tree(label, nothing))
+            push!(children, Tree(token))
         end
     end
-end
-
-function count_words(words)
-    wordcounts = Dict()
-    for word in words
-        wordcounts[word] = get(wordcounts, word, 0) + 1
-    end
-    return wordcounts
 end
 
 function build_vocabs(trees)
     words = Set()
     labels = Set()
     for tree in trees
-        push!(words, map(t->t.label, leaves(tree)))
-        push!(labels, map(t->t.label, nonterms(tree)))
+        push!(words, map(t->t.label, leaves(tree))...)
+        push!(labels, map(t->t.label, nonterms(tree))...)
     end
-    w2i, _ = build_vocab(words)
-    l2i, _ = build_bocab(labels)
-    return l2i, w2i, labels, words
+    push!(words, UNK)
+    w2i, i2w = build_vocab(words)
+    l2i, i2l = build_vocab(labels)
+    return l2i, w2i, i2l, i2w
 end
 
 function build_vocab(xs)
@@ -221,7 +215,7 @@ function build_vocab(xs)
 end
 
 # initialize hidden and cell arrays
-function initstate(atype, hidden, batchsize)
+function initstate(atype, hidden, batchsize=1)
     state = Array(Any, 2)
     state[1] = zeros(batchsize, hidden)
     state[2] = zeros(batchsize, hidden)
@@ -268,58 +262,50 @@ end
 
 
 # treenn loss function
-function loss(w, s, tree)
-end
-
-# loss function
-function loss(w, s, seq, out, values=[])
-    # encoder
-    sfs, sbs = encoder(w,s,seq)
-
-    # prediction
-    atype = typeof(AutoGrad.getval(w[1]))
+function loss(w, s0, tree)
     total = 0
-    rng = 1:length(seq)
-    for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
-        ypred = x * w[7] .+ w[8]
-        ynorm = logp(ypred,2)
-        ygold = convert(atype, out[t])
-        total += sum(ygold .* ynorm)
-    end
+    function helper(subtree)
+        if length(subtree.children) == 1 && isleaf(subtree.children[1])
+            t = subtree.children[1]
+            ss = lstm(w,b,copy(s0)...,t.data)
 
-    push!(values, AutoGrad.getval(-total))
-    return -total
+            # softloss calculation
+        end
+
+        length(subtree.children) == 2 || error("...")
+        (t1,t2) = subtree.children
+
+    end
+    if length(t.children) == 1
+        isleaf(t.children[1]) || error(t.children[1])
+        return
+    end
 end
 
-# bilstm encoder
-function encoder(w,s,seq)
-    atype = typeof(AutoGrad.getval(w[1]))
+# lstm without forget gate
+function lstm(weight, bias, hidden, cell, input)
+    gates   = hcat(input,hidden) * weight .+ bias
+    hsize   = size(hidden,2)
+    ingate  = sigm(gates[:,1:hsize])
+    outgate = sigm(gates[:,1+hsize:2hsize])
+    change  = sigm(gates[:,1+2hsize:3hsize])
+    cell    = ingate .* change
+    hidden  = outgate .* tanh(cell)
+    return (hidden,cell)
+end
 
-    # states and state histories
-    sf, sb = copy(s), copy(s)
-    sfs = Array(Any, length(seq))
-    sbs = Array(Any, length(seq))
-
-    # embedding
-    embed = Array(Any, length(seq))
-    for k = 1:length(seq)
-        embed[k] = convert(atype, seq[k]) * w[9]
-    end
-
-    # encoding
-    rng = 1:length(seq)
-    for (ft,bt) in zip(rng,reverse(rng))
-        # forward LSTM
-        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],embed[ft])
-        sfs[ft] = copy(sf[1])
-
-        # backward LSTM
-        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],embed[bt])
-        sbs[bt] = copy(sb[1])
-    end
-
-    (sfs, sbs)
+# lstm with two children forget gates, wf/bf -> forget gate parameters
+function lstm(weight, bias, hiddens, cells, input, wf, bf)
+    hidden  = sum(hiddens)
+    hsize   = size(hidden,2)
+    gates   = hcat(input,hidden) * weight .+ bias
+    ingate  = sigm(gates[:,1:hsize])
+    outgate = sigm(gates[:,1+hsize:2hsize])
+    change  = sigm(gates[:,1+2hsize:3hsize])
+    forgets = map(h->sigm(hcat(input,h)*wf .+ bf), hiddens)
+    cell    = ingate .* change + sum(x->x[1].*x[2], zip(forgets,cells))
+    hidden  = outgate .* cell
+    return (hidden,cell)
 end
 
 # tag given input sentence
