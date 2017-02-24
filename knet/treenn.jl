@@ -34,75 +34,58 @@ function main(args)
     tst = read_file(o[:dev])
 
     # count words and build vocabulary
-    l2i, w2i, labels, words = build_vocabs(trn)
-    nwords = length(words); nlabels = length(labels)
+    l2i, w2i, i2l, i2w = build_vocabs(trn)
+    nwords = length(w2i); nlabels = length(l2i)
+    make_data!(trn, w2i, l2i); make_data!(tst, w2i, l2i)
+
     # build model
-    # w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
-    #                 o[:MLP_SIZE], o[:EMBED_SIZE])
-    # s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
-    # opt = initopt(w)
+    w = initweights(
+        atype, o[:HIDDEN_SIZE], length(w2i), length(l2i), o[:EMBED_SIZE])
+    s = initstate(atype, o[:HIDDEN_SIZE])
+    opt = initopt(w)
 
     # train bilstm tagger
-    println("nwords=$nwords, nlabels=$nlabels"); flush(STDOUT)
+    # println("nwords=$nwords, nlabels=$nlabels"); flush(STDOUT)
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
-    return;
     t0 = now()
-    all_time = dev_time = all_tagged = this_tagged = this_loss = 0
+    sents = 0
     for epoch = 1:o[:epochs]
+        closs = 0.0
+        cwords = 0
         shuffle!(trn)
         for k = 1:length(trn)
+            sents += 1
             iter = (epoch-1)*length(trn) + k
-            if iter % 500 == 0
-                @printf("%f\n", this_loss/this_tagged); flush(STDOUT)
-                all_tagged += this_tagged
-                this_loss = this_tagged = 0
-                all_time = Int(now()-t0)*0.001
+            tree = trn[k]
+            this_loss, this_words = train!(w,s,tree,opt)
+            closs += this_loss
+            cwords += this_words
+
+            if iter % 1000 == 0
+                @printf("%f\n", closs/cwords); flush(STDOUT)
+                closs = 0.0
+                cwords = 0
             end
-
-            if iter % 10000 == 0 || all_time > o[:TIMEOUT]
-                dev_start = now()
-                good_sent = bad_sent = good = bad = 0.0
-                for sent in tst
-                    seq = make_input(sent, w2i)
-                    nwords = length(sent)
-                    ypred = predict(w, copy(s), seq)
-                    ypred = map(x->i2t[x], predict(w,copy(s),seq))
-                    ygold = map(x -> x[2], sent)
-                    same = true
-                    for (y1,y2) in zip(ypred, ygold)
-                        if y1 == y2
-                            good += 1
-                        else
-                            bad += 1
-                            same = false
-                        end
-                    end
-                    if same
-                        good_sent += 1
-                    else
-                        bad_sent += 1
-                    end
-                end
-                dev_time += Int(now()-dev_start)*0.001
-                train_time = Int(now()-t0)*0.001-dev_time
-
-                @printf(
-                    "tag_acc=%.4f, sent_acc=%.4f, time=%.4f, word_per_sec=%.4f\n",
-                    good/(good+bad), good_sent/(good_sent+bad_sent), train_time,
-                    all_tagged/train_time); flush(STDOUT)
-
-                all_time > o[:TIMEOUT] && exit()
-            end
-
-            # train on minibatch
-            seq = make_input(trn[k], w2i)
-            out = make_output(trn[k], t2i)
-
-            batch_loss = train!(w,s,seq,out,opt)
-            this_loss += batch_loss
-            this_tagged += length(trn[k])
         end
-        @printf("epoch %d finished\n", epoch-1); flush(STDOUT)
+        all_time += Int(now()-t0)*0.001
+        @printf("epoch %d finished\n", epoch); flush(STDOUT)
+
+        good = bad = 0
+        for tree in tst
+            ind, nwords = predict(w, copy(s), tree)
+            ypred = l2i[ind]
+            ygold = tree.label
+            if ypred == ygold
+                good += 1
+            else
+                bad += 1
+            end
+        end
+        @printf(
+            "acc=%.4f, time=%.4f, sent_per_sec=%.4f\n",
+            good/(good+bad), all_time, sents/all_time); flush(STDOUT)
+
+        all_time > o[:TIMEOUT] && exit()
     end
 end
 
@@ -214,6 +197,23 @@ function build_vocab(xs)
     return x2i, i2x
 end
 
+function make_data!(trees, w2i, l2i)
+    for tree in trees
+        for leaf in leaves(tree)
+            ind = get(w2i, leaf.label, w2i[UNK])
+            onehot = falses(1,length(w2i))
+            onehot[ind] = 1
+            leaf.data = onehot
+        end
+        for nonterm in nonterms(tree)
+            ind = l2i[nonterm.label]
+            onehot = falses(1,length(l2i))
+            onehot[ind] = 1
+            nonterm.data = onehot
+        end
+    end
+end
+
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize=1)
     state = Array(Any, 2)
@@ -223,115 +223,110 @@ function initstate(atype, hidden, batchsize=1)
 end
 
 # initialize all weights of the language model
-# w[1:2] => weight/bias params for forward LSTM network
-# w[3:4] => weight/bias params for backward LSTM network
-# w[5:8] => weight/bias params for MLP network
-# w[9]   => word embeddings
-function initweights(atype, hidden, words, tags, embed, mlp, winit=0.01)
-    w = Array(Any, 9)
+function initweights(atype, hidden, words, labels, embed, winit=0.01)
+    w = Array(Any, 7)
     input = embed
-    w[1] = winit*randn(input+hidden, 4*hidden)
-    w[2] = zeros(1, 4*hidden)
-    w[2][1:hidden] = 1
-    w[3] = winit*randn(input+hidden, 4*hidden)
-    w[4] = zeros(1, 4*hidden)
-    w[4][1:hidden] = 1
-    w[5] = winit*randn(2*hidden, mlp)
-    w[6] = zeros(1, mlp)
-    w[7] = winit*randn(mlp, tags)
-    w[8] = winit*randn(1, tags)
-    w[9] = winit*randn(words, embed)
+    w[1] = winit*randn(input+hidden, 3*hidden)
+    w[2] = zeros(1, 3*hidden)
+    w[3] = winit*randn(2*hidden, hidden)
+    w[4] = ones(1,hidden)
+    w[5] = winit*randn(hidden, labels)
+    w[6] = zeros(1,labels)
+    w[7] = winit*randn(words, embed)
     return map(i->convert(atype, i), w)
 end
 
 # init optimization parameters (only ADAM with defaults)
 initopt(w) = map(Adam, w)
 
-# LSTM model - input * weight, concatenated weights
-function lstm(weight, bias, hidden, cell, input)
-    gates   = hcat(input,hidden) * weight .+ bias
-    hsize   = size(hidden,2)
-    forget  = sigm(gates[:,1:hsize])
-    ingate  = sigm(gates[:,1+hsize:2hsize])
-    outgate = sigm(gates[:,1+2hsize:3hsize])
-    change  = tanh(gates[:,1+3hsize:end])
-    cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
-    return (hidden,cell)
+function lstm(w,hs,cs,x,forget=false)
+    h = forget ? hcat(hs...) : hs
+    hsize  = size(h,2)
+    # info(size(x))
+    # info(size(h))
+    # info(size(w[1]))
+    # info(size(w[2]))
+    gates = hcat(x,h) * w[1] .+ w[2]
+
+    i  = sigm(gates[:,1:hsize])
+    o  = sigm(gates[:,1+hsize:2hsize])
+    u  = sigm(gates[:,1+2hsize:3hsize])
+    c  = i .* u
+
+    if forget
+        c1 = cs[1]
+        c2 = cs[2]
+        f1 = sigm(hcat(x,h)) * w[3] .+ w[4]
+        f2 = sigm(hcat(x,h)) * w[3] .+ w[4]
+        c  = c + f1 .* c1 + f2 .* c2
+    end
+
+    h = o .* tanh(c)
+    return (h,c)
 end
 
-
-# treenn loss function
-function loss(w, s0, tree)
-    total = 0
-    function helper(subtree)
-        if length(subtree.children) == 1 && isleaf(subtree.children[1])
-            t = subtree.children[1]
-            ss = lstm(w,b,copy(s0)...,t.data)
-
-            # softloss calculation
+function traverse(w, s0, tree)
+    atype = typeof(AutoGrad.getval(w[1]))
+    hiddens = Any[]
+    ygolds  = Any[]
+    function helper(t)
+        if length(t.children) == 1 && isleaf(t.children[1])
+            l = t.children[1]
+            embed = convert(atype, l.data) * w[7]
+            h,c = lstm(w,copy(s0[1]),copy(s0[2]),embed)
+            push!(hiddens, h)
+            push!(ygolds, t.data)
+            return (h,c)
         end
 
-        length(subtree.children) == 2 || error("...")
-        (t1,t2) = subtree.children
+        length(t.children) != 2 && error("...")
+        t1,t2 = t.children[1], t.children[2]
+        h1,c1 = helper(t1)
+        h2,c2 = helper(t2)
+        hs,cs = [h1,h2], [c1,c2]
+        x = hcat(h1,h2)
+        h,c = lstm(w,hs,cs,x,true)
+        push!(hiddens, h)
+        push!(ygolds, t.data)
+        return (h,c)
+    end
 
-    end
-    if length(t.children) == 1
-        isleaf(t.children[1]) || error(t.children[1])
-        return
-    end
+    helper(tree)
+    return hiddens, cells, ygolds
 end
 
-# lstm without forget gate
-function lstm(weight, bias, hidden, cell, input)
-    gates   = hcat(input,hidden) * weight .+ bias
-    hsize   = size(hidden,2)
-    ingate  = sigm(gates[:,1:hsize])
-    outgate = sigm(gates[:,1+hsize:2hsize])
-    change  = sigm(gates[:,1+2hsize:3hsize])
-    cell    = ingate .* change
-    hidden  = outgate .* tanh(cell)
-    return (hidden,cell)
-end
+# treenn loss function
+function loss(w, s0, tree, values=[])
+    atype = typeof(AutoGrad.getval(w[1]))
+    total = 0
+    hs, ys = traverse(w, copy(s0), tree)
+    for (h,c,y) in zip(hs,ys)
+        ygold  = convert(atype, y)
+        ypred  = h * w[5] .+ w[6]
+        ynorm  = logp(ypred,2)
+        total += sum(ygold .* ynorm)
+    end
 
-# lstm with two children forget gates, wf/bf -> forget gate parameters
-function lstm(weight, bias, hiddens, cells, input, wf, bf)
-    hidden  = sum(hiddens)
-    hsize   = size(hidden,2)
-    gates   = hcat(input,hidden) * weight .+ bias
-    ingate  = sigm(gates[:,1:hsize])
-    outgate = sigm(gates[:,1+hsize:2hsize])
-    change  = sigm(gates[:,1+2hsize:3hsize])
-    forgets = map(h->sigm(hcat(input,h)*wf .+ bf), hiddens)
-    cell    = ingate .* change + sum(x->x[1].*x[2], zip(forgets,cells))
-    hidden  = outgate .* cell
-    return (hidden,cell)
+    push!(values, -total); push!(values, length(ys))
+    return -total
 end
 
 # tag given input sentence
-function predict(w,s,seq)
-    # encoder
-    sfs, sbs = encoder(w,s,seq)
-
-    # prediction
-    tags = []
+function predict(w,s,tree)
     atype = typeof(AutoGrad.getval(w[1]))
-    rng = 1:length(seq)
-    for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
-        ypred = x * w[7] .+ w[8]
-        ypred = convert(Array{Float32}, ypred)[:]
-        push!(tags, indmax(ypred))
-    end
-
-    tags
+    total = 0
+    hs, ys = traverse(w, copy(s0), tree)
+    ygold = convert(atype, ys[end])
+    ypred = hs[end] * w[5] .+ w[6]
+    ypred = convert(Array{Float32}, ypred)[:]
+    return (indmax(ypred),length(ys))
 end
 
 lossgradient = grad(loss)
 
-function train!(w,s,seq,tags,opt)
+function train!(w,s,tree,opt)
     values = []
-    gloss = lossgradient(w, copy(s), seq, tags, values)
+    gloss = lossgradient(w, copy(s), tree, values)
     for k = 1:length(w)
         update!(w[k], gloss[k], opt[k])
     end
@@ -339,7 +334,7 @@ function train!(w,s,seq,tags,opt)
     for k = 1:length(s)
         s[k] = AutoGrad.getval(s[k])
     end
-    values[1]
+    return values
 end
 
 !isinteractive() && !isdefined(Core.Main, :load_only) && main(ARGS)
