@@ -47,12 +47,13 @@ function main(args)
     # train bilstm tagger
     # println("nwords=$nwords, nlabels=$nlabels"); flush(STDOUT)
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
-    t0 = now()
+    all_time = 0
     sents = 0
     for epoch = 1:o[:epochs]
         closs = 0.0
         cwords = 0
         shuffle!(trn)
+        t0 = now()
         for k = 1:length(trn)
             sents += 1
             iter = (epoch-1)*length(trn) + k
@@ -216,52 +217,50 @@ end
 
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize=1)
-    state = Array(Any, 2)
-    state[1] = zeros(batchsize, hidden)
-    state[2] = zeros(batchsize, hidden)
-    return map(s->convert(atype,s), state)
+    return convert(atype, zeros(batchsize, hidden))
 end
 
 # initialize all weights of the language model
 function initweights(atype, hidden, words, labels, embed, winit=0.01)
-    w = Array(Any, 7)
-    input = embed
-    w[1] = winit*randn(input+hidden, 3*hidden)
+    w = Array(Any, 9)
+    w[1] = winit*randn(embed, 3*hidden)
     w[2] = zeros(1, 3*hidden)
-    w[3] = winit*randn(2*hidden, hidden)
-    w[4] = ones(1,hidden)
-    w[5] = winit*randn(hidden, labels)
-    w[6] = zeros(1,labels)
-    w[7] = winit*randn(words, embed)
+    w[3] = winit*randn(2*hidden, 3*hidden)
+    w[4] = zeros(1, 3*hidden)
+    w[5] = winit*randn(hidden, hidden)
+    w[6] = winit*randn(hidden, hidden)
+    w[7] = ones(1,hidden)
+    w[8] = winit*randn(hidden, labels)
+    w[9] = winit*randn(words, embed)
     return map(i->convert(atype, i), w)
 end
 
 # init optimization parameters (only ADAM with defaults)
 initopt(w) = map(Adam, w)
 
-function lstm(w,hs,cs,x,forget=false)
-    h = forget ? hcat(hs...) : hs
-    hsize  = size(h,2)
-    # info(size(x))
-    # info(size(h))
-    # info(size(w[1]))
-    # info(size(w[2]))
-    gates = hcat(x,h) * w[1] .+ w[2]
+function lstm(w,x)
+    x = x * w[end]
+    hsize = size(x,2)
+    gates = x * w[1] .+ w[2]
+    i = sigm(gates[:,1:hsize])
+    o = sigm(gates[:,1+hsize:2hsize])
+    u = sigm(gates[:,1+2hsize:3hsize])
+    c = i .* u
+    h = o .* tanh(c)
+    return (h,c)
+end
 
+function slstm(w,h1,h2,c1,c2)
+    hsize = size(h1,2)
+    h = hcat(h1,h2)
+    gates = h * w[3] .+ w[4]
     i  = sigm(gates[:,1:hsize])
     o  = sigm(gates[:,1+hsize:2hsize])
     u  = sigm(gates[:,1+2hsize:3hsize])
-    c  = i .* u
-
-    if forget
-        c1 = cs[1]
-        c2 = cs[2]
-        f1 = sigm(hcat(x,h)) * w[3] .+ w[4]
-        f2 = sigm(hcat(x,h)) * w[3] .+ w[4]
-        c  = c + f1 .* c1 + f2 .* c2
-    end
-
-    h = o .* tanh(c)
+    f1 = sigm(h1 * w[5] .+ w[7])
+    f2 = sigm(h2 * w[6] .+ w[7])
+    c  = i .* u + f1 .* c1 .+ f2 .* c2
+    h  = o .* tanh(c)
     return (h,c)
 end
 
@@ -272,8 +271,8 @@ function traverse(w, s0, tree)
     function helper(t)
         if length(t.children) == 1 && isleaf(t.children[1])
             l = t.children[1]
-            embed = convert(atype, l.data) * w[7]
-            h,c = lstm(w,copy(s0[1]),copy(s0[2]),embed)
+            x = convert(atype, l.data)
+            h,c = lstm(w,x)
             push!(hiddens, h)
             push!(ygolds, t.data)
             return (h,c)
@@ -283,16 +282,14 @@ function traverse(w, s0, tree)
         t1,t2 = t.children[1], t.children[2]
         h1,c1 = helper(t1)
         h2,c2 = helper(t2)
-        hs,cs = [h1,h2], [c1,c2]
-        x = hcat(h1,h2)
-        h,c = lstm(w,hs,cs,x,true)
+        h,c = slstm(w,h1,h2,c1,c2)
         push!(hiddens, h)
         push!(ygolds, t.data)
         return (h,c)
     end
 
     helper(tree)
-    return hiddens, cells, ygolds
+    return hiddens, ygolds
 end
 
 # treenn loss function
@@ -300,9 +297,9 @@ function loss(w, s0, tree, values=[])
     atype = typeof(AutoGrad.getval(w[1]))
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
-    for (h,c,y) in zip(hs,ys)
+    for (h,y) in zip(hs,ys)
         ygold  = convert(atype, y)
-        ypred  = h * w[5] .+ w[6]
+        ypred  = h * w[end-1]
         ynorm  = logp(ypred,2)
         total += sum(ygold .* ynorm)
     end
@@ -312,7 +309,7 @@ function loss(w, s0, tree, values=[])
 end
 
 # tag given input sentence
-function predict(w,s,tree)
+function predict(w,s0,tree)
     atype = typeof(AutoGrad.getval(w[1]))
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
@@ -329,10 +326,6 @@ function train!(w,s,tree,opt)
     gloss = lossgradient(w, copy(s), tree, values)
     for k = 1:length(w)
         update!(w[k], gloss[k], opt[k])
-    end
-    isa(s,Vector{Any}) || error("State should not be Boxed.")
-    for k = 1:length(s)
-        s[k] = AutoGrad.getval(s[k])
     end
     return values
 end
