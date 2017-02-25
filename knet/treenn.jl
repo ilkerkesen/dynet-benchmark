@@ -69,12 +69,11 @@ function main(args)
             end
         end
         all_time += Int(now()-t0)*0.001
-        @printf("epoch %d finished\n", epoch); flush(STDOUT)
 
         good = bad = 0
         for tree in tst
             ind, nwords = predict(w, copy(s), tree)
-            ypred = l2i[ind]
+            ypred = i2l[ind]
             ygold = tree.label
             if ypred == ygold
                 good += 1
@@ -314,7 +313,7 @@ function predict(w,s0,tree)
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
     ygold = convert(atype, ys[end])
-    ypred = hs[end] * w[5] .+ w[6]
+    ypred = hs[end] * w[end-1]
     ypred = convert(Array{Float32}, ypred)[:]
     return (indmax(ypred),length(ys))
 end
