@@ -1,3 +1,4 @@
+module Tagger
 using Knet
 using AutoGrad
 using ArgParse
@@ -29,7 +30,7 @@ function main(args)
     isa(args, AbstractString) && (args=split(args))
     o = parse_args(args, s; as_symbols=true)
     o[:seed] > 0 && srand(o[:seed])
-    atype = o[:gpu] ? KnetArray{Float32} : Float32
+    atype = o[:gpu] ? KnetArray{Float32} : Array{Float32}
 
     # read data
     trn = read_file(o[:train])
@@ -109,7 +110,7 @@ function main(args)
                     good/(good+bad), good_sent/(good_sent+bad_sent), train_time,
                     all_tagged/train_time); flush(STDOUT)
 
-                all_time > o[:TIMEOUT] && exit()
+                all_time > o[:TIMEOUT] && return
             end
 
             # train on minibatch
@@ -158,7 +159,7 @@ end
 # make input
 function make_input(sample, w2i)
     nwords = length(sample)
-    fseq = map(i -> zeros(Cuchar, 1, length(w2i)), [1:nwords...])
+    fseq = map(i -> falses(1, length(w2i)), [1:nwords...])
     map!(t->fseq[t][get(w2i, sample[t][1], w2i[UNK])] = 1, [1:nwords...])
     return fseq
 end
@@ -166,7 +167,7 @@ end
 # make output
 function make_output(sample, t2i)
     nwords = length(sample)
-    tags = map(i -> zeros(Cuchar, 1, length(t2i)), [1:nwords...])
+    tags = map(i -> falses(1, length(t2i)), [1:nwords...])
     map!(t->tags[t][t2i[sample[t][2]]] = 1, [1:nwords...])
     return tags
 end
@@ -302,4 +303,10 @@ function train!(w,s,seq,tags,opt)
     values[1]
 end
 
-!isinteractive() && !isdefined(Core.Main, :load_only) && main(ARGS)
+if VERSION >= v"0.5.0-dev+7720"
+    PROGRAM_FILE=="knet/bilstm-tagger.jl" && main(ARGS)
+else
+    !isinteractive() && !isdefined(Core.Main,:load_only) && main(ARGS)
+end
+
+end # module

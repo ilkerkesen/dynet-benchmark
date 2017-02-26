@@ -1,3 +1,4 @@
+module CharTagger
 using Knet
 using AutoGrad
 using ArgParse
@@ -31,7 +32,7 @@ function main(args)
     isa(args, AbstractString) && (args=split(args))
     o = parse_args(args, s; as_symbols=true)
     o[:seed] > 0 && srand(o[:seed])
-    atype = o[:gpu] ? KnetArray{Float32} : Float32
+    atype = o[:gpu] ? KnetArray{Float32} : Array{Float32}
 
     # read data
     trn = read_file(o[:train])
@@ -115,7 +116,7 @@ function main(args)
                     good/(good+bad), good_sent/(good_sent+bad_sent), train_time,
                     all_tagged/train_time); flush(STDOUT)
 
-                all_time > o[:TIMEOUT] && exit()
+                all_time > o[:TIMEOUT] && return
             end
 
             # train with instance
@@ -166,14 +167,14 @@ function make_input(sample, w2i, c2i)
     for word in words
         push!(is_word, haskey(w2i, word))
         if is_word[end]
-            onehot = zeros(Cuchar, 1, length(w2i))
+            onehot = falses(1, length(w2i))
             onehot[w2i[word]] = 1
             push!(seq, onehot)
         else
             chars = [PAD; convert(Array{UInt8,1}, word); PAD]
             charseq = []
             for char in chars
-                onehot = zeros(Cuchar, 1, length(c2i))
+                onehot = falses(1, length(c2i))
                 onehot[c2i[char]] = 1
                 push!(charseq, onehot)
             end
@@ -188,7 +189,7 @@ function make_output(sample,t2i)
     seq = []
     tags = map(x->x[2], sample)
     for tag in tags
-        onehot = zeros(Cuchar, 1, length(t2i))
+        onehot = falses(1, length(t2i))
         onehot[t2i[tag]] = 1
         push!(seq, onehot)
     end
@@ -361,4 +362,10 @@ function train!(w,s,seq,is_word,out,opt)
     values[1]
 end
 
-!isinteractive() && !isdefined(Core.Main, :load_only) && main(ARGS)
+if VERSION >= v"0.5.0-dev+7720"
+    PROGRAM_FILE=="knet/bilstm-tagger-withchar.jl" && main(ARGS)
+else
+    !isinteractive() && !isdefined(Core.Main,:load_only) && main(ARGS)
+end
+
+end # module

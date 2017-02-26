@@ -1,3 +1,4 @@
+module TreeNN
 using Knet
 using AutoGrad
 using ArgParse
@@ -27,7 +28,7 @@ function main(args)
     isa(args, AbstractString) && (args=split(args))
     o = parse_args(args, s; as_symbols=true)
     o[:seed] > 0 && srand(o[:seed])
-    atype = o[:gpu] ? KnetArray{Float32} : Float32
+    atype = o[:gpu] ? KnetArray{Float32} : Array{Float32}
 
     # read data
     trn = read_file(o[:train])
@@ -85,7 +86,7 @@ function main(args)
             "acc=%.4f, time=%.4f, sent_per_sec=%.4f\n",
             good/(good+bad), all_time, sents/all_time); flush(STDOUT)
 
-        all_time > o[:TIMEOUT] && exit()
+        all_time > o[:TIMEOUT] && return
     end
 end
 
@@ -329,4 +330,10 @@ function train!(w,s,tree,opt)
     return values
 end
 
-!isinteractive() && !isdefined(Core.Main, :load_only) && main(ARGS)
+if VERSION >= v"0.5.0-dev+7720"
+    PROGRAM_FILE=="knet/treenn.jl" && main(ARGS)
+else
+    !isinteractive() && !isdefined(Core.Main,:load_only) && main(ARGS)
+end
+
+end # module

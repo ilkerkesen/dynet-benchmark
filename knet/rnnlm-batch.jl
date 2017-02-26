@@ -1,3 +1,4 @@
+module RNNLM
 using Knet
 using AutoGrad
 using ArgParse
@@ -8,10 +9,11 @@ const SOS = "<s>"
 const EOS = "</s>"
 t00 = now()
 
-function main(args)
-    s = ArgParseSettings()
-    s.description = "Build vocabulary from training splits"
+function main(args=ARGS)
 
+    s = ArgParseSettings()
+    s.description = "RNN Language Model in Knet"
+    s.exc_handler=ArgParse.debug_handler
     @add_arg_table s begin
         ("--gpu"; action=:store_true; help="use GPU or not")
         ("MB_SIZE"; arg_type=Int; help="minibatch_size")
@@ -28,7 +30,7 @@ function main(args)
     isa(args, AbstractString) && (args=split(args))
     o = parse_args(args, s; as_symbols=true)
     o[:seed] > 0 && srand(o[:seed])
-    atype = o[:gpu] ? KnetArray{Float32} : Float32
+    atype = o[:gpu] ? KnetArray{Float32} : Array{Float32}
 
     # build data
     w2i = Dict()
@@ -76,6 +78,10 @@ function main(args)
                     "nll=%.4f, ppl=%.4f, words=%d, time=%.4f, word_per_sec=%.4f\n",
                     dev_loss/dev_words, exp(dev_loss/dev_words), dev_words,
                     train_time, all_tagged/train_time); flush(STDOUT)
+
+                if all_time > o[:TIMEOUT]
+                    return
+                end
             end
 
             # train on minibatch
@@ -118,7 +124,7 @@ function make_batches(data, w2i, batchsize)
         longest = reduce(max, lengths)
         nwords = sum(lengths)
         nsamples = length(samples)
-        seq = map(i -> zeros(Cuchar, nsamples, length(w2i)), [1:longest...])
+        seq = map(i -> falses(nsamples, length(w2i)), [1:longest...])
         for i = 1:nsamples
             map!(t->seq[t][i,samples[i][t]] = 1, [1:length(samples[i])...])
         end
@@ -206,4 +212,10 @@ function train!(w,s,seq,opt)
     values[1]
 end
 
-!isinteractive() && !isdefined(Core.Main, :load_only) && main(ARGS)
+if VERSION >= v"0.5.0-dev+7720"
+    PROGRAM_FILE=="knet/rnnlm-batch.jl" && main(ARGS)
+else
+    !isinteractive() && !isdefined(Core.Main,:load_only) && main(ARGS)
+end
+
+end # module
