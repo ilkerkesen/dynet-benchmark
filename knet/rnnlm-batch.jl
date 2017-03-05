@@ -45,7 +45,7 @@ function main(args=ARGS)
     s0 = initstate(atype, o[:HIDDEN_SIZE], o[:MB_SIZE])
     s1 = initstate(atype, o[:HIDDEN_SIZE], size(trn[end][1][1],1))
     s2 = initstate(atype, o[:HIDDEN_SIZE], size(tst[end][1][1],1))
-    opt = initopt(w)
+    opt = map(x->Adam(), w)
 
     # train language model
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
@@ -156,9 +156,6 @@ function initweights(atype, hidden, vocab, embed, winit=0.01)
     w[5] = winit*randn(vocab, embed)
     return map(i->convert(atype, i), w)
 end
-
-# init optimization parameters (only ADAM with defaults)
-initopt(w) = map(Adam, w)
 
 # LSTM model - input * weight, concatenated weights
 function lstm(weight, bias, hidden, cell, input)

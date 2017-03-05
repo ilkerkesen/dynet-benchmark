@@ -43,7 +43,7 @@ function main(args)
     w = initweights(
         atype, o[:HIDDEN_SIZE], length(w2i), length(l2i), o[:EMBED_SIZE])
     s = initstate(atype, o[:HIDDEN_SIZE])
-    opt = initopt(w)
+    opt = map(x->Adam(), w)
 
     # train bilstm tagger
     # println("nwords=$nwords, nlabels=$nlabels"); flush(STDOUT)
@@ -235,9 +235,6 @@ function initweights(atype, hidden, words, labels, embed, winit=0.01)
     return map(i->convert(atype, i), w)
 end
 
-# init optimization parameters (only ADAM with defaults)
-initopt(w) = map(Adam, w)
-
 function lstm(w,x)
     x = x * w[end]
     hsize = size(x,2)
@@ -266,30 +263,27 @@ end
 
 function traverse(w, s0, tree)
     atype = typeof(AutoGrad.getval(w[1]))
-    hiddens = Any[]
-    ygolds  = Any[]
-    function helper(t)
+    function helper(t,hs,ys)
+        h = c = nothing
         if length(t.children) == 1 && isleaf(t.children[1])
             l = t.children[1]
             x = convert(atype, l.data)
             h,c = lstm(w,x)
-            push!(hiddens, h)
-            push!(ygolds, t.data)
-            return (h,c)
+            # info("$h,$c,$(t.data) --- $hs,$ys")
+        elseif length(t.children) == 2
+            t1,t2 = t.children[1], t.children[2]
+            h1,c1,hs,ys = helper(t1,hs,ys)
+            h2,c2,hs,ys = helper(t2,hs,ys)
+            h,c = slstm(w,h1,h2,c1,c2)
+            # info("$h,$c,$(t.data) --- $hs,$ys")
+        else
+            error("invalid tree")
         end
-
-        length(t.children) != 2 && error("...")
-        t1,t2 = t.children[1], t.children[2]
-        h1,c1 = helper(t1)
-        h2,c2 = helper(t2)
-        h,c = slstm(w,h1,h2,c1,c2)
-        push!(hiddens, h)
-        push!(ygolds, t.data)
-        return (h,c)
+        return (h,c,[hs...,h],[ys...,t.data])
     end
 
-    helper(tree)
-    return hiddens, ygolds
+    h,c,hs,ys = helper(tree, Any[], Any[])
+    return hs,ys
 end
 
 # treenn loss function

@@ -60,7 +60,7 @@ function main(args)
     w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
                     o[:MLP_SIZE], o[:EMBED_SIZE])
     s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
-    opt = initopt(w)
+    opt = map(x->Adam(), w)
 
     # train bilstm tagger
     println("nwords=$nwords, ntags=$ntags"); flush(STDOUT)
@@ -201,9 +201,6 @@ function initweights(atype, hidden, words, tags, embed, mlp, winit=0.01)
     w[9] = winit*randn(words, embed)
     return map(i->convert(atype, i), w)
 end
-
-# init optimization parameters (only ADAM with defaults)
-initopt(w) = map(Adam, w)
 
 # LSTM model - input * weight, concatenated weights
 function lstm(weight, bias, hidden, cell, input)

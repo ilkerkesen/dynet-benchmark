@@ -7,6 +7,7 @@ export LD_LIBRARY_PATH=$DYNET_PATH/build/dynet:$ANACONDA_PATH/lib:$CUDA_PATH/lib
 export LIBRARY_PATH=$DYNET_PATH/build/dynet:$ANACONDA_PATH/lib:$CUDA_PATH/lib64
 export PYTHONPATH=$DYNET_PATH/build/python
 PYTHON=python
+JULIA=julia
 
 DYFLAGS="--dynet-mem 4096"
 GPUSUF=
@@ -30,7 +31,7 @@ runcmd() {
     MYTIMEOUT=$TIMEOUT
     if [[ $1 == "dynet-cpp" ]]; then
       mycmd="$1/$2$GPUSUF $DYFLAGS"
-      if [[ $4 =~ dynet-cpp-bs01-ws128-hs256-.* ]] || [[ $4 =~ dynet-cpp-bs16-ws128-hs256-.* ]] || [[ $2 =~ bilstm.* ]] || [[ $2 =~ treenn ]]; then 
+      if [[ $4 =~ dynet-cpp-bs01-ws128-hs256-.* ]] || [[ $4 =~ dynet-cpp-bs16-ws128-hs256-.* ]] || [[ $2 =~ bilstm.* ]] || [[ $2 =~ treenn ]]; then
         MYTIMEOUT=$LONGTIMEOUT
       fi
     elif [[ $1 == "dynet-py" ]]; then
@@ -38,7 +39,9 @@ runcmd() {
     elif [[ $1 == "chainer" ]]; then
       mycmd="$PYTHON -u $1/$2.py --chainer_gpu $CGPU"
     elif [[ $1 == "tensorflow" ]]; then
-      mycmd="$PYTHON -u $1/$2.py --gpu"
+	mycmd="$PYTHON -u $1/$2.py --gpu"
+    elif [[ $1 == "knet" ]]; then
+	mycmd="$JULIA $1/$2.jl --gpu"
     else
       mycmd="$PYTHON -u $1/$2.py"
     fi
@@ -54,7 +57,7 @@ for trial in 1 2 3; do
   for embsize in 128; do
     hidsize=$(($embsize*2))
     for mbsize in 64 16 04 01; do
-      for f in dynet-cpp dynet-py chainer theano tensorflow; do
+      for f in dynet-cpp dynet-py chainer theano tensorflow knet; do
         if [[ $f == "dynet-cpp" ]]; then
           runcmd $f rnnlm-seq "$mbsize $embsize $hidsize 0" $f-ms$mbsize-es$embsize-hs$hidsize-sp0-t$trial
         fi
@@ -77,7 +80,7 @@ for trial in 1 2 3; do
   wembsize=128
   hidsize=50
   mlpsize=32
-  for f in dynet-cpp dynet-py chainer theano tensorflow; do
+  for f in dynet-cpp dynet-py chainer theano tensorflow knet; do
     runcmd $f bilstm-tagger "$wembsize $hidsize $mlpsize 0" $f-ws$wembsize-hs$hidsize-mlps$mlpsize-su0-t$trial
     if [[ $f == dynet* ]]; then
       runcmd $f bilstm-tagger "$wembsize $hidsize $mlpsize 1" $f-ws$wembsize-hs$hidsize-mlps$mlpsize-su1-t$trial
@@ -89,7 +92,7 @@ for trial in 1 2 3; do
   wembsize=128
   hidsize=50
   mlpsize=32
-  for f in dynet-cpp dynet-py theano chainer; do
+  for f in dynet-cpp dynet-py theano chainer knet; do
     runcmd $f bilstm-tagger-withchar "$cembsize $wembsize $hidsize $mlpsize 0" $f-cs$cembsize-ws$wembsize-hs$hidsize-mlps$mlpsize-su0-t$trial
     if [[ $f == dynet* ]]; then
       runcmd $f bilstm-tagger-withchar "$cembsize $wembsize $hidsize $mlpsize 1" $f-cs$cembsize-ws$wembsize-hs$hidsize-mlps$mlpsize-su1-t$trial
@@ -99,7 +102,7 @@ for trial in 1 2 3; do
   # Run treenn
   wembsize=128
   hidsize=128
-  for f in dynet-cpp dynet-py chainer; do
+  for f in dynet-cpp dynet-py chainer knet; do
     runcmd $f treenn "$wembsize $hidsize 0" $f-ws$wembsize-hs$hidsize-su0-t$trial
     if [[ $f == dynet* ]]; then
       runcmd $f treenn "$wembsize $hidsize 1" $f-ws$wembsize-hs$hidsize-su1-t$trial
