@@ -269,13 +269,11 @@ function traverse(w, s0, tree)
             l = t.children[1]
             x = convert(atype, l.data)
             h,c = lstm(w,x)
-            # info("$h,$c,$(t.data) --- $hs,$ys")
         elseif length(t.children) == 2
             t1,t2 = t.children[1], t.children[2]
             h1,c1,hs,ys = helper(t1,hs,ys)
             h2,c2,hs,ys = helper(t2,hs,ys)
             h,c = slstm(w,h1,h2,c1,c2)
-            # info("$h,$c,$(t.data) --- $hs,$ys")
         else
             error("invalid tree")
         end
