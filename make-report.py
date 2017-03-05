@@ -12,7 +12,7 @@ stats = defaultdict(lambda: {})
 allstats = defaultdict(lambda: [])
 
 ##### Regexes
-fnameregex = re.compile(r"log/([a-z-]+?)(-gpu|)/(dynet-py|dynet-cpp|dynet-seq|chainer|theano|tensorflow)-(.*?)-t([123]).log:(.*)")
+fnameregex = re.compile(r"log/([a-z-]+?)(-gpu|)/(dynet-py|dynet-cpp|dynet-seq|chainer|theano|tensorflow|knet)-(.*?)-t([123]).log:(.*)")
 startregex = re.compile(r"startup time: (.*)")
 eqregex = re.compile(r"(.*)=(.*)")
 commentregex = re.compile(r"^ *((#|//).*)?")
@@ -35,14 +35,15 @@ taskna = {
   ("dynet-seq", "bilstm-tagger-withchar"): 1,
   ("dynet-seq", "treenn"): 1,
 }
-toolkits = ["dynet-cpp", "dynet-py", "chainer", "dynet-seq", "theano", "tensorflow"]
+toolkits = ["dynet-cpp", "dynet-py", "chainer", "dynet-seq", "theano", "tensorflow", "knet"]
 prettyname = {
   "dynet-cpp": "DyC++",
   "dynet-py":  "DyPy",
   "dynet-seq": "DyC++ Seq",
   "tensorflow":"TF",
   "chainer":   "Chainer",
-  "theano":    "Theano"
+  "theano":    "Theano",
+  "knet":      "Knet"
 }
 
 ##### Load from log files
