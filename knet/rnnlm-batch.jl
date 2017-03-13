@@ -124,9 +124,11 @@ function make_batches(data, w2i, batchsize)
         longest = reduce(max, lengths)
         nwords = sum(lengths)
         nsamples = length(samples)
-        seq = map(i -> falses(nsamples, length(w2i)), [1:longest...])
+        pad = length(w2i)
+        seq = map(i -> pad * ones(Int, nsamples), [1:longest...])
+        # info("sizes(nsamples/longest): ", nsamples, ",", longest)
         for i = 1:nsamples
-            map!(t->seq[t][i,samples[i][t]] = 1, [1:length(samples[i])...])
+            map!(t->seq[t][i] = samples[i][t], [1:length(samples[i])...])
         end
         push!(batches, (seq, nwords))
     end
@@ -151,8 +153,9 @@ function initweights(atype, hidden, vocab, embed, winit=0.01)
     w[1] = winit*randn(input+hidden, 4*hidden)
     w[2] = zeros(1, 4*hidden)
     w[2][1:hidden] = 1 # forget gate bias
-    w[3] = winit*randn(hidden, vocab)
-    w[4] = zeros(1, vocab)
+    w[3] = winit*randn(hidden, vocab+1)
+    w[3][:,end] = 0 # pad embedding
+    w[4] = zeros(1, vocab+1)
     w[5] = winit*randn(vocab, embed)
     return map(i->convert(atype, i), w)
 end
@@ -172,21 +175,32 @@ end
 
 # LSTM prediction
 function predict(w, s, x)
-    x = x * w[5]
-    (s[1],s[2]) = lstm(w[1],w[2],s[1],s[2],x)
+    emb = w[5][x,:] # x * w[5]
+    (s[1],s[2]) = lstm(w[1],w[2],s[1],s[2],emb)
     return s[1] * w[3] .+ w[4]
+end
+
+function logprob(output, ypred)
+    nrows,ncols = size(ypred)
+    index = similar(output)
+    @inbounds for i=1:length(output)
+        index[i] = i + (output[i]-1)*nrows
+    end
+    o1 = logp(ypred,2)
+    o2 = o1[index]
+    o3 = sum(o2)
+    return o3
 end
 
 # LM loss function
 function loss(w, s, seq, values=[])
     total = 0
     atype = typeof(AutoGrad.getval(w[1]))
-    input = convert(atype, seq[1])
+    input = seq[1]
     for t in 1:length(seq)-1
         ypred = predict(w, s, input)
-        ynorm = logp(ypred,2)
-        ygold = convert(atype, seq[t+1])
-        total += sum(ygold .* ynorm)
+        ygold = seq[t+1]
+        total += logprob(ygold,ypred)
         input = ygold
     end
 
