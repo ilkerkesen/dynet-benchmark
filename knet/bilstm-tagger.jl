@@ -159,17 +159,13 @@ end
 # make input
 function make_input(sample, w2i)
     nwords = length(sample)
-    fseq = map(i -> falses(1, length(w2i)), [1:nwords...])
-    map!(t->fseq[t][get(w2i, sample[t][1], w2i[UNK])] = 1, [1:nwords...])
-    return fseq
+    return map(i->get(w2i, sample[i][1], w2i[UNK]), [1:nwords...])
 end
 
 # make output
 function make_output(sample, t2i)
     nwords = length(sample)
-    tags = map(i -> falses(1, length(t2i)), [1:nwords...])
-    map!(t->tags[t][t2i[sample[t][2]]] = 1, [1:nwords...])
-    return tags
+    return map(i->t2i[sample[i][2]], [1:nwords...])
 end
 
 # initialize hidden and cell arrays
@@ -227,9 +223,8 @@ function loss(w, s, seq, out, values=[])
     for t in rng
         x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
         ypred = x * w[7] .+ w[8]
-        ynorm = logp(ypred,2)
-        ygold = convert(atype, out[t])
-        total += sum(ygold .* ynorm)
+        ygold = reshape(out[t:t], 1, 1)
+        total += logprob(ygold,ypred)
     end
 
     push!(values, AutoGrad.getval(-total))
@@ -246,24 +241,38 @@ function encoder(w,s,seq)
     sbs = Array(Any, length(seq))
 
     # embedding
-    embed = Array(Any, length(seq))
-    for k = 1:length(seq)
-        embed[k] = convert(atype, seq[k]) * w[9]
-    end
+    embed = w[9][seq,:]
+    # info(size(embed))
 
     # encoding
     rng = 1:length(seq)
     for (ft,bt) in zip(rng,reverse(rng))
         # forward LSTM
-        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],embed[ft])
+        x = embed[ft,:]
+        x = reshape(x, 1, length(x))
+        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],x)
         sfs[ft] = copy(sf[1])
 
         # backward LSTM
-        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],embed[bt])
+        x = embed[bt,:]
+        x = reshape(x, 1, length(x))
+        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],x)
         sbs[bt] = copy(sb[1])
     end
 
     (sfs, sbs)
+end
+
+function logprob(output, ypred)
+    nrows,ncols = size(ypred)
+    index = similar(output)
+    @inbounds for i=1:length(output)
+        index[i] = i + (output[i]-1)*nrows
+    end
+    o1 = logp(ypred,2)
+    o2 = o1[index]
+    o3 = sum(o2)
+    return o3
 end
 
 # tag given input sentence
