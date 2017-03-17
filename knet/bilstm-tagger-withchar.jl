@@ -162,38 +162,22 @@ function build_vocabulary(words)
 end
 
 function make_input(sample, w2i, c2i)
-    seq, is_word = [], []
+    seq, is_word = Any[], Bool[]
     words = map(x->x[1], sample)
     for word in words
         push!(is_word, haskey(w2i, word))
         if is_word[end]
-            onehot = falses(1, length(w2i))
-            onehot[w2i[word]] = 1
-            push!(seq, onehot)
+            push!(seq, w2i[word])
         else
             chars = [PAD; convert(Array{UInt8,1}, word); PAD]
-            charseq = []
-            for char in chars
-                onehot = falses(1, length(c2i))
-                onehot[c2i[char]] = 1
-                push!(charseq, onehot)
-            end
-            push!(seq, charseq)
+            push!(seq, map(c->c2i[c], chars))
         end
     end
-
     (seq,is_word)
 end
 
 function make_output(sample,t2i)
-    seq = []
-    tags = map(x->x[2], sample)
-    for tag in tags
-        onehot = falses(1, length(t2i))
-        onehot[t2i[tag]] = 1
-        push!(seq, onehot)
-    end
-    seq
+    map(s->t2i[s[2]], sample)
 end
 
 # initialize hidden and cell arrays
@@ -264,9 +248,8 @@ function loss(w, s, seq, is_word, out, values=[])
     for t in rng
         x = hcat(sfs[t], sbs[t]) * w[9] .+ w[10]
         ypred = x * w[11] .+ w[12]
-        ynorm = logp(ypred,2)
-        ygold = convert(atype, out[t])
-        total += sum(ygold .* ynorm)
+        ygold = reshape(out[t:t], 1, 1)
+        total += logprob(ygold,ypred)
     end
 
     push!(values, AutoGrad.getval(-total))
@@ -279,28 +262,27 @@ function encoder(w,s,seq,is_word)
 
     # embedding
     embed = Array(Any, length(seq))
+    inds = convert(Array{Int64}, seq[is_word])
+    wembed = w[end-1][inds,:]
+    # cembed = w[end][reduce(vcat, seq[!is_word]),:]
+
+    wi = 1
     for k = 1:length(seq)
-
-        # word embeddings
         if is_word[k]
-            embed[k] = convert(atype, seq[k]) * w[end-1]
-            continue
+            embed[k] = wembed[wi:wi,:]
+            wi += 1; continue
         end
 
-        # char embeddings
-        cembed = Array(Any, length(seq[k]))
-        for i = 1:length(seq[k])
-            cembed[i] = convert(atype, seq[k][i]) * w[end]
-        end
-
-        rng = 1:length(seq[k])
+        # rare word embed
+        inds = convert(Array{Int64}, seq[k])
+        cembed = w[end][inds,:]
+        rng = 1:length(inds)
         sf = copy(s[3:4])
         sb = copy(sf)
         for (ft,bt) in zip(rng,reverse(rng))
-            (sf[1],sf[2]) = lstm(w[5],w[6],sf[1],sf[2],cembed[ft])
-            (sb[1],sb[2]) = lstm(w[7],w[8],sb[1],sb[2],cembed[bt])
+            (sf[1],sf[2]) = lstm(w[5],w[6],sf[1],sf[2],cembed[ft:ft,:])
+            (sb[1],sb[2]) = lstm(w[7],w[8],sb[1],sb[2],cembed[bt:bt,:])
         end
-
         embed[k] = hcat(sf[1],sb[1])
     end
 
@@ -322,6 +304,18 @@ function encoder(w,s,seq,is_word)
     end
 
     (sfs, sbs)
+end
+
+function logprob(output, ypred)
+    nrows,ncols = size(ypred)
+    index = similar(output)
+    @inbounds for i=1:length(output)
+        index[i] = i + (output[i]-1)*nrows
+    end
+    o1 = logp(ypred,2)
+    o2 = o1[index]
+    o3 = sum(o2)
+    return o3
 end
 
 # tag given input sentence
@@ -346,7 +340,6 @@ end
 lossgradient = grad(loss)
 
 function train!(w,s,seq,is_word,out,opt)
-    # info("hede")
     values = []
     gloss = lossgradient(w, copy(s), seq, is_word, out, values)
     for k = 1:length(w)
