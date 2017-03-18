@@ -202,15 +202,10 @@ function make_data!(trees, w2i, l2i)
     for tree in trees
         for leaf in leaves(tree)
             ind = get(w2i, leaf.label, w2i[UNK])
-            onehot = falses(1,length(w2i))
-            onehot[ind] = 1
-            leaf.data = onehot
+            leaf.data = ind
         end
         for nonterm in nonterms(tree)
-            ind = l2i[nonterm.label]
-            onehot = falses(1,length(l2i))
-            onehot[ind] = 1
-            nonterm.data = onehot
+            nonterm.data = l2i[nonterm.label]
         end
     end
 end
@@ -235,8 +230,8 @@ function initweights(atype, hidden, words, labels, embed, winit=0.01)
     return map(i->convert(atype, i), w)
 end
 
-function lstm(w,x)
-    x = x * w[end]
+function lstm(w,ind)
+    x = w[end][ind:ind,:]
     hsize = size(x,2)
     gates = x * w[1] .+ w[2]
     i = sigm(gates[:,1:hsize])
@@ -267,8 +262,7 @@ function traverse(w, s0, tree)
         h = c = nothing
         if length(t.children) == 1 && isleaf(t.children[1])
             l = t.children[1]
-            x = convert(atype, l.data)
-            h,c = lstm(w,x)
+            h,c = lstm(w,l.data)
         elseif length(t.children) == 2
             t1,t2 = t.children[1], t.children[2]
             h1,c1,hs,ys = helper(t1,hs,ys)
@@ -289,11 +283,9 @@ function loss(w, s0, tree, values=[])
     atype = typeof(AutoGrad.getval(w[1]))
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
-    for (h,y) in zip(hs,ys)
-        ygold  = convert(atype, y)
+    for (h,ygold) in zip(hs,ys)
         ypred  = h * w[end-1]
-        ynorm  = logp(ypred,2)
-        total += sum(ygold .* ynorm)
+        total += logprob([ygold], ypred)
     end
 
     push!(values, -total); push!(values, length(ys))
@@ -305,13 +297,24 @@ function predict(w,s0,tree)
     atype = typeof(AutoGrad.getval(w[1]))
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
-    ygold = convert(atype, ys[end])
     ypred = hs[end] * w[end-1]
     ypred = convert(Array{Float32}, ypred)[:]
     return (indmax(ypred),length(ys))
 end
 
 lossgradient = grad(loss)
+
+function logprob(output, ypred)
+    nrows,ncols = size(ypred)
+    index = similar(output)
+    @inbounds for i=1:length(output)
+        index[i] = i + (output[i]-1)*nrows
+    end
+    o1 = logp(ypred,2)
+    o2 = o1[index]
+    o3 = sum(o2)
+    return o3
+end
 
 function train!(w,s,tree,opt)
     values = []
