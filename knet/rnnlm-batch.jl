@@ -213,9 +213,7 @@ lossgradient = grad(loss)
 function train!(w,s,seq,opt)
     values = []
     gloss = lossgradient(w, copy(s), seq, values)
-    for k = 1:length(w)
-        update!(w[k], gloss[k], opt[k])
-    end
+    update!(w, gloss, opt)
     isa(s,Vector{Any}) || error("State should not be Boxed.")
     for k = 1:length(s)
         s[k] = AutoGrad.getval(s[k])

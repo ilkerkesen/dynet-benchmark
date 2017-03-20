@@ -17,9 +17,11 @@ if [[ $# == 1 ]]; then
   DYFLAGS="$DYFLAGS --dynet-gpus 1"
   GPUSUF="-gpu"
   CGPU=0
+  KNETGPU=" --gpu"
 else
   export THEANO_FLAGS="device=cpu,floatX=float32"
   CGPU=-1
+  KNETGPU=""
 fi
 
 TIMEOUT=600
@@ -41,7 +43,7 @@ runcmd() {
     elif [[ $1 == "tensorflow" ]]; then
 	mycmd="$PYTHON -u $1/$2.py --gpu"
     elif [[ $1 == "knet" ]]; then
-	mycmd="$JULIA $1/$2.jl --gpu"
+	mycmd="$JULIA $1/$2.jl"$KNETGPU
     else
       mycmd="$PYTHON -u $1/$2.py"
     fi
