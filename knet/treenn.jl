@@ -10,7 +10,7 @@ t00 = now()
 
 function main(args)
     s = ArgParseSettings()
-    s.description = "Bidirectional LSTM Tagger in Knet"
+    s.description = "Tree-structured LSTM network in Knet"
 
     @add_arg_table s begin
         ("--gpu"; action=:store_true; help="use GPU or not")

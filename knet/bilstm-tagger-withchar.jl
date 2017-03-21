@@ -11,7 +11,7 @@ t00 = now()
 
 function main(args)
     s = ArgParseSettings()
-    s.description = "Bidirectional LSTM Tagger in Knet"
+    s.description = "Bidirectional LSTM Tagger (with chars) in Knet"
 
     @add_arg_table s begin
         ("--gpu"; action=:store_true; help="use GPU or not")
@@ -262,19 +262,17 @@ function encoder(w,s,seq,is_word)
 
     # embedding
     embed = Array(Any, length(seq))
-    inds = convert(Array{Int64}, seq[is_word])
+    inds = convert(Array{Int32}, seq[is_word])
     wembed = w[end-1][inds,:]
-    # cembed = w[end][reduce(vcat, seq[!is_word]),:]
-
     wi = 1
+
     for k = 1:length(seq)
         if is_word[k]
-            embed[k] = wembed[wi:wi,:]
-            wi += 1; continue
+            embed[k] = wembed[wi:wi,:]; wi += 1; continue
         end
 
         # rare word embed
-        inds = convert(Array{Int64}, seq[k])
+        inds = convert(Array{Int32}, seq[k])
         cembed = w[end][inds,:]
         rng = 1:length(inds)
         sf = copy(s[3:4])
