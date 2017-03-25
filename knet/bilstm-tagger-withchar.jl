@@ -170,7 +170,7 @@ function make_input(sample, w2i, c2i)
             push!(seq, w2i[word])
         else
             chars = [PAD; convert(Array{UInt8,1}, word); PAD]
-            push!(seq, map(c->c2i[c], chars))
+            push!(seq, convert(Array{Int32}, map(c->c2i[c], chars)))
         end
     end
     (seq,is_word)
@@ -272,7 +272,7 @@ function encoder(w,s,seq,is_word)
         end
 
         # rare word embed
-        inds = convert(Array{Int32}, seq[k])
+        inds = seq[k]
         cembed = w[end][inds,:]
         rng = 1:length(inds)
         sf = copy(s[3:4])
