@@ -6,14 +6,13 @@ using ArgParse
 const train_file = "data/text/train.txt"
 const test_file = "data/text/dev.txt"
 const SOS = "<s>"
-const EOS = "</s>"
 t00 = now()
 
 function main(args=ARGS)
-
     s = ArgParseSettings()
     s.description = "RNN Language Model in Knet"
     s.exc_handler=ArgParse.debug_handler
+
     @add_arg_table s begin
         ("--gpu"; action=:store_true; help="use GPU or not")
         ("MB_SIZE"; arg_type=Int; help="minibatch_size")
@@ -97,7 +96,7 @@ end
 
 # build vocabulary, training and test data
 function read_data(file, w2i)
-    get_tokens(line) = [SOS; split(line, " ")[2:end-1]]
+    get_tokens(line) = [split(line, " ")[2:end-1]; SOS]
     data = open(file, "r") do f
         data = []
         for ln in readlines(f)
@@ -126,7 +125,6 @@ function make_batches(data, w2i, batchsize)
         nsamples = length(samples)
         pad = length(w2i)
         seq = map(i -> pad * ones(Int, nsamples), [1:longest...])
-        # info("sizes(nsamples/longest): ", nsamples, ",", longest)
         for i = 1:nsamples
             map!(t->seq[t][i] = samples[i][t], [1:length(samples[i])...])
         end
@@ -138,8 +136,8 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize)
     state = Array(Any, 2)
-    state[1] = zeros(batchsize, hidden)
-    state[2] = zeros(batchsize, hidden)
+    state[1] = zeros(hidden, batchsize)
+    state[2] = zeros(hidden, batchsize)
     return map(s->convert(atype,s), state)
 end
 
@@ -150,24 +148,23 @@ end
 function initweights(atype, hidden, vocab, embed, winit=0.01)
     w = Array(Any, 5)
     input = embed
-    w[1] = winit*randn(input+hidden, 4*hidden)
-    w[2] = zeros(1, 4*hidden)
+    w[1] = winit*randn(4*hidden, hidden+input)
+    w[2] = zeros(4*hidden, 1)
     w[2][1:hidden] = 1 # forget gate bias
-    w[3] = winit*randn(hidden, vocab+1)
-    w[3][:,end] = 0 # pad embedding
-    w[4] = zeros(1, vocab+1)
-    w[5] = winit*randn(vocab, embed)
+    w[3] = winit*randn(vocab+1, hidden)
+    w[4] = zeros(vocab+1, 1)
+    w[5] = winit*randn(embed, vocab+1)
     return map(i->convert(atype, i), w)
 end
 
-# LSTM model - input * weight, concatenated weights
+# LSTM model -i nput * weight, concatenated weights
 function lstm(weight, bias, hidden, cell, input)
-    gates   = hcat(input,hidden) * weight .+ bias
-    hsize   = size(hidden,2)
-    forget  = sigm(gates[:,1:hsize])
-    ingate  = sigm(gates[:,1+hsize:2hsize])
-    outgate = sigm(gates[:,1+2hsize:3hsize])
-    change  = tanh(gates[:,1+3hsize:end])
+    gates   = weight * vcat(hidden,input) .+ bias
+    hsize   = size(hidden,1)
+    forget  = sigm(gates[1:hsize,:])
+    ingate  = sigm(gates[1+hsize:2hsize,:])
+    outgate = sigm(gates[1+2hsize:3hsize,:])
+    change  = tanh(gates[1+3hsize:end,:])
     cell    = cell .* forget + ingate .* change
     hidden  = outgate .* tanh(cell)
     return (hidden,cell)
@@ -175,18 +172,15 @@ end
 
 # LSTM prediction
 function predict(w, s, x)
-    emb = w[5][x,:] # x * w[5]
+    emb = w[5][:,x] # size(w[5]): ExV
     (s[1],s[2]) = lstm(w[1],w[2],s[1],s[2],emb)
-    return s[1] * w[3] .+ w[4]
+    return w[3] * s[1] .+ w[4]
 end
 
 function logprob(output, ypred)
     nrows,ncols = size(ypred)
-    index = similar(output)
-    @inbounds for i=1:length(output)
-        index[i] = i + (output[i]-1)*nrows
-    end
-    o1 = logp(ypred,2)
+    index = output + nrows*(0:(length(output)-1))
+    o1 = logp(ypred,1)
     o2 = o1[index]
     o3 = sum(o2)
     return o3
@@ -214,10 +208,6 @@ function train!(w,s,seq,opt)
     values = []
     gloss = lossgradient(w, copy(s), seq, values)
     update!(w, gloss, opt)
-    isa(s,Vector{Any}) || error("State should not be Boxed.")
-    for k = 1:length(s)
-        s[k] = AutoGrad.getval(s[k])
-    end
     values[1]
 end
 

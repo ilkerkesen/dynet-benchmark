@@ -212,46 +212,47 @@ end
 
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize=1)
-    return convert(atype, zeros(batchsize, hidden))
+    return convert(atype, zeros(hidden, batchsize))
 end
 
 # initialize all weights of the language model
 function initweights(atype, hidden, words, labels, embed, winit=0.01)
     w = Array(Any, 9)
-    w[1] = winit*randn(embed, 3*hidden)
-    w[2] = zeros(1, 3*hidden)
-    w[3] = winit*randn(2*hidden, 3*hidden)
-    w[4] = zeros(1, 3*hidden)
+    w[1] = winit*randn(3*hidden, embed)
+    w[2] = zeros(3*hidden, 1)
+    w[3] = winit*randn(3*hidden, 2*hidden)
+    w[4] = zeros(3*hidden, 1)
     w[5] = winit*randn(hidden, hidden)
     w[6] = winit*randn(hidden, hidden)
-    w[7] = ones(1,hidden)
-    w[8] = winit*randn(hidden, labels)
-    w[9] = winit*randn(words, embed)
+    w[7] = ones(hidden,1)
+    w[8] = winit*randn(labels, hidden)
+    w[9] = winit*randn(embed, words)
     return map(i->convert(atype, i), w)
 end
 
 function lstm(w,ind)
-    x = w[end][ind:ind,:]
-    hsize = size(x,2)
-    gates = x * w[1] .+ w[2]
-    i = sigm(gates[:,1:hsize])
-    o = sigm(gates[:,1+hsize:2hsize])
-    u = sigm(gates[:,1+2hsize:3hsize])
+    x = w[end][:,ind]
+    x = reshape(x, length(x), 1)
+    hsize = size(x,1)
+    gates = w[1] * x .+ w[2]
+    i = sigm(gates[1:hsize,:])
+    o = sigm(gates[1+hsize:2hsize,:])
+    u = sigm(gates[1+2hsize:3hsize,:])
     c = i .* u
     h = o .* tanh(c)
     return (h,c)
 end
 
 function slstm(w,h1,h2,c1,c2)
-    hsize = size(h1,2)
-    h = hcat(h1,h2)
-    gates = h * w[3] .+ w[4]
-    i  = sigm(gates[:,1:hsize])
-    o  = sigm(gates[:,1+hsize:2hsize])
-    u  = sigm(gates[:,1+2hsize:3hsize])
-    f1 = sigm(h1 * w[5] .+ w[7])
-    f2 = sigm(h2 * w[6] .+ w[7])
-    c  = i .* u + f1 .* c1 .+ f2 .* c2
+    hsize = size(h1,1)
+    h = vcat(h1,h2)
+    gates = w[3] * h .+ w[4]
+    i  = sigm(gates[1:hsize,:])
+    o  = sigm(gates[1+hsize:2hsize,:])
+    u  = sigm(gates[1+2hsize:3hsize,:])
+    f1 = sigm(w[5] * h1 .+ w[7])
+    f2 = sigm(w[6] * h2 .+ w[7])
+    c  = i .* u .+ f1 .* c1 .+ f2 .* c2
     h  = o .* tanh(c)
     return (h,c)
 end
@@ -284,7 +285,7 @@ function loss(w, s0, tree, values=[])
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
     for (h,ygold) in zip(hs,ys)
-        ypred  = h * w[end-1]
+        ypred  = w[end-1] * h
         total += logprob([ygold], ypred)
     end
 
@@ -297,7 +298,7 @@ function predict(w,s0,tree)
     atype = typeof(AutoGrad.getval(w[1]))
     total = 0
     hs, ys = traverse(w, copy(s0), tree)
-    ypred = hs[end] * w[end-1]
+    ypred = w[end-1] * hs[end]
     ypred = convert(Array{Float32}, ypred)[:]
     return (indmax(ypred),length(ys))
 end
@@ -306,11 +307,8 @@ lossgradient = grad(loss)
 
 function logprob(output, ypred)
     nrows,ncols = size(ypred)
-    index = similar(output)
-    @inbounds for i=1:length(output)
-        index[i] = i + (output[i]-1)*nrows
-    end
-    o1 = logp(ypred,2)
+    index = output + nrows*(0:(length(output)-1))
+    o1 = logp(ypred,1)
     o2 = o1[index]
     o3 = sum(o2)
     return o3

@@ -171,8 +171,8 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize)
     state = Array(Any, 2)
-    state[1] = zeros(batchsize, hidden)
-    state[2] = zeros(batchsize, hidden)
+    state[1] = zeros(hidden, batchsize)
+    state[2] = zeros(hidden, batchsize)
     return map(s->convert(atype,s), state)
 end
 
@@ -184,28 +184,28 @@ end
 function initweights(atype, hidden, words, tags, embed, mlp, winit=0.01)
     w = Array(Any, 9)
     input = embed
-    w[1] = winit*randn(input+hidden, 4*hidden)
-    w[2] = zeros(1, 4*hidden)
+    w[1] = winit*randn(4*hidden, input+hidden)
+    w[2] = zeros(4*hidden, 1)
     w[2][1:hidden] = 1
-    w[3] = winit*randn(input+hidden, 4*hidden)
-    w[4] = zeros(1, 4*hidden)
+    w[3] = winit*randn(4*hidden, input+hidden)
+    w[4] = zeros(4*hidden, 1)
     w[4][1:hidden] = 1
-    w[5] = winit*randn(2*hidden, mlp)
-    w[6] = zeros(1, mlp)
-    w[7] = winit*randn(mlp, tags)
-    w[8] = winit*randn(1, tags)
-    w[9] = winit*randn(words, embed)
+    w[5] = winit*randn(mlp, 2*hidden)
+    w[6] = zeros(mlp, 1)
+    w[7] = winit*randn(tags, mlp)
+    w[8] = winit*randn(tags, 1)
+    w[9] = winit*randn(embed, words)
     return map(i->convert(atype, i), w)
 end
 
 # LSTM model - input * weight, concatenated weights
 function lstm(weight, bias, hidden, cell, input)
-    gates   = hcat(input,hidden) * weight .+ bias
-    hsize   = size(hidden,2)
-    forget  = sigm(gates[:,1:hsize])
-    ingate  = sigm(gates[:,1+hsize:2hsize])
-    outgate = sigm(gates[:,1+2hsize:3hsize])
-    change  = tanh(gates[:,1+3hsize:end])
+    gates   = weight * vcat(hidden,input) .+ bias
+    hsize   = size(hidden,1)
+    forget  = sigm(gates[1:hsize,:])
+    ingate  = sigm(gates[1+hsize:2hsize,:])
+    outgate = sigm(gates[1+2hsize:3hsize,:])
+    change  = tanh(gates[1+3hsize:end,:])
     cell    = cell .* forget + ingate .* change
     hidden  = outgate .* tanh(cell)
     return (hidden,cell)
@@ -221,8 +221,8 @@ function loss(w, s, seq, out, values=[])
     total = 0
     rng = 1:length(seq)
     for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
-        ypred = x * w[7] .+ w[8]
+        x = w[5] * vcat(sfs[t], sbs[t]) .+ w[6]
+        ypred = w[7] * x .+ w[8]
         ygold = reshape(out[t:t], 1, 1)
         total += logprob(ygold,ypred)
     end
@@ -241,22 +241,23 @@ function encoder(w,s,seq)
     sbs = Array(Any, length(seq))
 
     # embedding
-    embed = w[9][seq,:]
-    # info(size(embed))
+    subembed = w[9][:,seq]
+    embed = Array(Any, length(seq))
+    for k = 1:size(subembed,2)
+        x = subembed[:,k]
+        x = reshape(x, length(x), 1)
+        embed[k] = x
+    end
 
     # encoding
     rng = 1:length(seq)
     for (ft,bt) in zip(rng,reverse(rng))
         # forward LSTM
-        x = embed[ft,:]
-        x = reshape(x, 1, length(x))
-        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],x)
+        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],embed[ft])
         sfs[ft] = copy(sf[1])
 
         # backward LSTM
-        x = embed[bt,:]
-        x = reshape(x, 1, length(x))
-        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],x)
+        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],embed[bt])
         sbs[bt] = copy(sb[1])
     end
 
@@ -265,11 +266,8 @@ end
 
 function logprob(output, ypred)
     nrows,ncols = size(ypred)
-    index = similar(output)
-    @inbounds for i=1:length(output)
-        index[i] = i + (output[i]-1)*nrows
-    end
-    o1 = logp(ypred,2)
+    index = output + nrows*(0:(length(output)-1))
+    o1 = logp(ypred,1)
     o2 = o1[index]
     o3 = sum(o2)
     return o3
@@ -285,8 +283,8 @@ function predict(w,s,seq)
     atype = typeof(AutoGrad.getval(w[1]))
     rng = 1:length(seq)
     for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[5] .+ w[6]
-        ypred = x * w[7] .+ w[8]
+        x = w[5] * vcat(sfs[t], sbs[t]) .+ w[6]
+        ypred = w[7] * x .+ w[8]
         ypred = convert(Array{Float32}, ypred)[:]
         push!(tags, indmax(ypred))
     end
