@@ -183,17 +183,17 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, wembed, batchsize=1)
     state = Array(Any, 4)
-    state[1] = zeros(batchsize, hidden)
-    state[2] = zeros(batchsize, hidden)
-    state[3] = zeros(batchsize, div(wembed,2))
-    state[4] = zeros(batchsize, div(wembed,2))
+    state[1] = zeros(hidden, batchsize)
+    state[2] = zeros(hidden, batchsize)
+    state[3] = zeros(div(wembed,2), batchsize)
+    state[4] = zeros(div(wembed,2), batchsize)
     return map(s->convert(atype,s), state)
 end
 
 # init LSTM parameters
 function initlstm(input, hidden, winit=0.01)
-    w = winit*randn(input+hidden, 4*hidden)
-    b = zeros(1, 4*hidden)
+    w = winit*randn(4*hidden, input+hidden)
+    b = zeros(4*hidden, 1)
     b[1:hidden] = 1
     return (w, b)
 end
@@ -212,25 +212,27 @@ function initweights(
     end
 
     # weight/bias params for MLP network
-    w[9] = winit*randn(2*hidden, mlp)
-    w[10] = zeros(1, mlp)
-    w[11] = winit*randn(mlp, tags)
-    w[12] = winit*randn(1, tags)
+    w[9] = winit*randn(mlp, 2*hidden)
+    w[10] = zeros(mlp, 1)
+    w[11] = winit*randn(tags, mlp)
+    w[12] = winit*randn(tags, 1)
 
     # word/char embeddings
-    w[13] = winit*randn(words, wembed)
-    w[14] = winit*randn(chars, cembed)
+    w[13] = winit*randn(wembed, words)
+    w[14] = winit*randn(cembed, chars)
     return map(i->convert(atype, i), w)
 end
 
 # LSTM model - input * weight, concatenated weights
 function lstm(weight, bias, hidden, cell, input)
-    gates   = hcat(input,hidden) * weight .+ bias
-    hsize   = size(hidden,2)
-    forget  = sigm(gates[:,1:hsize])
-    ingate  = sigm(gates[:,1+hsize:2hsize])
-    outgate = sigm(gates[:,1+2hsize:3hsize])
-    change  = tanh(gates[:,1+3hsize:end])
+    # info("size(hidden): ", size(hidden), " size(input): ", size(input))
+    # info("size(weight): ", size(weight), " size(bias): ", size(bias))
+    gates   = weight * vcat(hidden,input) .+ bias
+    hsize   = size(hidden,1)
+    forget  = sigm(gates[1:hsize,:])
+    ingate  = sigm(gates[1+hsize:2hsize,:])
+    outgate = sigm(gates[1+2hsize:3hsize,:])
+    change  = tanh(gates[1+3hsize:end,:])
     cell    = cell .* forget + ingate .* change
     hidden  = outgate .* tanh(cell)
     return (hidden,cell)
@@ -246,8 +248,8 @@ function loss(w, s, seq, is_word, out, values=[])
     total = 0
     rng = 1:length(seq)
     for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[9] .+ w[10]
-        ypred = x * w[11] .+ w[12]
+        x = w[9] * vcat(sfs[t], sbs[t]) .+ w[10]
+        ypred = w[11] * x .+ w[12]
         ygold = reshape(out[t:t], 1, 1)
         total += logprob(ygold,ypred)
     end
@@ -263,25 +265,25 @@ function encoder(w,s,seq,is_word)
     # embedding
     embed = Array(Any, length(seq))
     inds = convert(Array{Int32}, seq[is_word])
-    wembed = w[end-1][inds,:]
+    wembed = w[end-1][:,inds]
     wi = 1
 
     for k = 1:length(seq)
         if is_word[k]
-            embed[k] = wembed[wi:wi,:]; wi += 1; continue
+            embed[k] = wembed[:,wi:wi]; wi += 1; continue
         end
 
         # rare word embed
         inds = seq[k]
-        cembed = w[end][inds,:]
+        cembed = w[end][:,inds]
         rng = 1:length(inds)
         sf = copy(s[3:4])
         sb = copy(sf)
         for (ft,bt) in zip(rng,reverse(rng))
-            (sf[1],sf[2]) = lstm(w[5],w[6],sf[1],sf[2],cembed[ft:ft,:])
-            (sb[1],sb[2]) = lstm(w[7],w[8],sb[1],sb[2],cembed[bt:bt,:])
+            (sf[1],sf[2]) = lstm(w[5],w[6],sf[1],sf[2],cembed[:,ft:ft])
+            (sb[1],sb[2]) = lstm(w[7],w[8],sb[1],sb[2],cembed[:,bt:bt])
         end
-        embed[k] = hcat(sf[1],sb[1])
+        embed[k] = vcat(sf[1],sb[1])
     end
 
     # states and state histories
@@ -306,11 +308,8 @@ end
 
 function logprob(output, ypred)
     nrows,ncols = size(ypred)
-    index = similar(output)
-    @inbounds for i=1:length(output)
-        index[i] = i + (output[i]-1)*nrows
-    end
-    o1 = logp(ypred,2)
+    index = output + nrows*(0:(length(output)-1))
+    o1 = logp(ypred,1)
     o2 = o1[index]
     o3 = sum(o2)
     return o3
@@ -326,8 +325,8 @@ function predict(w,s,seq,is_word)
     atype = typeof(AutoGrad.getval(w[1]))
     rng = 1:length(seq)
     for t in rng
-        x = hcat(sfs[t], sbs[t]) * w[9] .+ w[10]
-        ypred = x * w[11] .+ w[12]
+        x = w[9] * vcat(sfs[t], sbs[t]) .+ w[10]
+        ypred = w[11] * x .+ w[12]
         ypred = convert(Array{Float32}, ypred)[:]
         push!(tags, indmax(ypred))
     end
