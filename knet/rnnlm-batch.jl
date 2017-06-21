@@ -2,6 +2,9 @@ module RNNLM
 using Knet
 using AutoGrad
 using ArgParse
+using ReverseDiff
+using ReverseDiff: gradient, GradientTape, compile, gradient!
+
 
 const train_file = "data/text/train.txt"
 const test_file = "data/text/dev.txt"
@@ -46,6 +49,10 @@ function main(args=ARGS)
     s2 = initstate(atype, o[:HIDDEN_SIZE], size(tst[end][1][1],1))
     opt = map(x->Adam(), w)
 
+    # compile tape
+    f_tape = GradientTape(loss, (w...,s...,trn[1][1]...))
+    compiled = compile(f_tape)
+
     # train language model
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
     t0 = now()
@@ -86,7 +93,7 @@ function main(args=ARGS)
             # train on minibatch
             seq, batch_words = trn[k]
             s = o[:MB_SIZE] == size(seq[1],1) ? s0 : s1
-            batch_loss = train!(w,s,seq,opt)
+            batch_loss = train!(w,s,seq,opt,compiled)
             this_loss += batch_loss
             this_words += batch_words
         end
@@ -187,9 +194,11 @@ function logprob(output, ypred)
 end
 
 # LM loss function
-function loss(w, s, seq, values=[])
+function loss(params...)
+    w = params[1:5]
+    s = params[6:7]
+    seq = params[8:end]
     total = 0
-    atype = typeof(AutoGrad.getval(w[1]))
     input = seq[1]
     for t in 1:length(seq)-1
         ypred = predict(w, s, input)
@@ -198,17 +207,16 @@ function loss(w, s, seq, values=[])
         input = ygold
     end
 
-    push!(values, AutoGrad.getval(-total))
+    # push!(values, AutoGrad.getval(-total))
     return -total
 end
 
-lossgradient = grad(loss)
+# lossgradient = grad(loss)
 
-function train!(w,s,seq,opt)
-    values = []
-    gloss = lossgradient(w, copy(s), seq, values)
-    update!(w, gloss, opt)
-    values[1]
+function train!(w,s,seq,opt,compiled)
+    params = (w...,s...,seq...)
+    gradient!(g,compiled,params)
+    update!(w,g,opt)
 end
 
 if VERSION >= v"0.5.0-dev+7720"
