@@ -50,7 +50,7 @@ function main(args=ARGS)
     opt = map(x->Adam(), w)
 
     # compile tape
-    f_tape = GradientTape(loss, (w...,s...,trn[1][1]...))
+    f_tape = GradientTape(loss, (w...,s0...,trn[1][1]...))
     compiled = compile(f_tape)
 
     # train language model
@@ -74,7 +74,7 @@ function main(args=ARGS)
                 for i = 1:length(tst)
                     seq, nwords = tst[i]
                     s = o[:MB_SIZE] == size(seq[1],1) ? s0 : s2
-                    dev_loss += loss(w,s,seq)
+                    dev_loss += loss(w...,s...,seq...)
                     dev_words += nwords
                 end
                 dev_time += Int(now()-dev_start)*0.001
