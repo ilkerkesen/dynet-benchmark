@@ -136,9 +136,9 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, batchsize)
     state = Array(Any, 2)
-    state[1] = zeros(hidden, batchsize)
-    state[2] = zeros(hidden, batchsize)
-    return map(s->convert(atype,s), state)
+    state[1] = convert(atype, zeros(hidden, batchsize))
+    state[2] = convert(atype, zeros(hidden, batchsize))
+    return state
 end
 
 # initialize all weights of the language model
@@ -161,12 +161,12 @@ end
 function lstm(weight, bias, hidden, cell, input)
     gates   = weight * vcat(hidden,input) .+ bias
     hsize   = size(hidden,1)
-    forget  = sigm(gates[1:hsize,:])
-    ingate  = sigm(gates[1+hsize:2hsize,:])
-    outgate = sigm(gates[1+2hsize:3hsize,:])
-    change  = tanh(gates[1+3hsize:end,:])
+    forget  = sigm.(gates[1:hsize,:])
+    ingate  = sigm.(gates[1+hsize:2hsize,:])
+    outgate = sigm.(gates[1+2hsize:3hsize,:])
+    change  = tanh.(gates[1+3hsize:end,:])
     cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
+    hidden  = outgate .* tanh.(cell)
     return (hidden,cell)
 end
 
