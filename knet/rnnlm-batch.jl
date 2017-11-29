@@ -62,8 +62,8 @@ function main(args=ARGS)
                 dev_start = now()
                 dev_loss = dev_words = 0
                 for i = 1:length(tst)
-                    seq, nwords = tst[i]
-                    dev_loss += loss(w,seq,srnn)
+                    x, y, nwords = tst[i]
+                    dev_loss += loss(w,x,y,srnn)
                     dev_words += nwords
                 end
                 dev_time += Int(now()-dev_start)*0.001
@@ -80,8 +80,8 @@ function main(args=ARGS)
             end
 
             # train on minibatch
-            seq, batch_words = trn[k]
-            batch_loss = train!(w,seq,opt,srnn)
+            x, y, batch_words = trn[k]
+            batch_loss = train!(w,x,y,opt,srnn)
             this_loss += batch_loss
             this_words += batch_words
         end
@@ -123,7 +123,11 @@ function make_batches(data, w2i, batchsize)
         for i = 1:nsamples
             map!(t->seq[i,t] = samples[i][t], [1:length(samples[i])...])
         end
-        push!(batches, (convert(Array{Int64}, seq), nwords))
+        x = seq[:,1:end-1]
+        x = convert(Array{Int64}, x)
+        y = seq[:,2:end]
+        y = convert(Array{Int64}, y)
+        push!(batches, (x, y, nwords))
     end
     return batches
 end
@@ -161,16 +165,15 @@ function predict(ws,xs,srnn,hx=nothing,cx=nothing)
     return wy*y2.+by, hy, cy
 end
 
-function loss(w,seq,srnn,h=nothing,c=nothing)
-    x = seq[:,1:end-1]; y = seq[:,2:end]
+function loss(w,x,y,srnn,h=nothing,c=nothing)
     py,hy,cy = predict(w,x,srnn,h,c)
     return nll(py,y; average=false)
 end
 
 lossgradient = gradloss(loss)
 
-function train!(w,seq,opt,srnn,h=nothing,c=nothing)
-    gloss,lossval = lossgradient(w,seq,srnn,h,c)
+function train!(w,x,y,opt,srnn,h=nothing,c=nothing)
+    gloss,lossval = lossgradient(w,x,y,srnn,h,c)
     update!(w, gloss, opt)
     return lossval
 end
