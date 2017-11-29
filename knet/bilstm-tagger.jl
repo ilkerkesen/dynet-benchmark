@@ -81,11 +81,11 @@ function main(args)
                 dev_start = now()
                 good_sent = bad_sent = good = bad = 0.0
                 for sent in tst
-                    x = make_input(sent, w2i)
-                    ygold = make_output(sent, t2i)
+                    seq = make_input(sent, w2i)
                     nwords = length(sent)
-                    ypred = predict(w, x, srnn)
-                    # TODO: fix accuracy
+                    ypred,_ = predict(w, seq, srnn)
+                    ypred = map(x->i2t[x], mapslices(indmax,Array(ypred),1))
+                    ygold = map(x -> x[2], sent)
                     same = true
                     for (y1,y2) in zip(ypred, ygold)
                         if y1 == y2
