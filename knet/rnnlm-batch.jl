@@ -40,11 +40,8 @@ function main(args=ARGS)
     trn, tst = map(split->make_batches(split, w2i, o[:MB_SIZE]), [trn, tst])
 
     # build model
-    w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), o[:EMBED_SIZE])
-    s0 = initstate(atype, o[:HIDDEN_SIZE], o[:MB_SIZE])
-    s1 = initstate(atype, o[:HIDDEN_SIZE], size(trn[end][1][1],1))
-    s2 = initstate(atype, o[:HIDDEN_SIZE], size(tst[end][1][1],1))
-    opt = map(x->Adam(), w)
+    w,srnn = initweights(atype, o[:HIDDEN_SIZE], length(w2i), o[:EMBED_SIZE])
+    opt = optimizers(w, Adam)
 
     # train language model
     println("startup time: ", Int(now()-t00)*0.001); flush(STDOUT)
@@ -66,8 +63,7 @@ function main(args=ARGS)
                 dev_loss = dev_words = 0
                 for i = 1:length(tst)
                     seq, nwords = tst[i]
-                    s = o[:MB_SIZE] == size(seq[1],1) ? s0 : s2
-                    dev_loss += loss(w,s,seq)
+                    dev_loss += loss(w,seq,srnn)
                     dev_words += nwords
                 end
                 dev_time += Int(now()-dev_start)*0.001
@@ -85,8 +81,7 @@ function main(args=ARGS)
 
             # train on minibatch
             seq, batch_words = trn[k]
-            s = o[:MB_SIZE] == size(seq[1],1) ? s0 : s1
-            batch_loss = train!(w,s,seq,opt)
+            batch_loss = train!(w,seq,opt,srnn)
             this_loss += batch_loss
             this_words += batch_words
         end
@@ -124,21 +119,13 @@ function make_batches(data, w2i, batchsize)
         nwords = sum(lengths)
         nsamples = length(samples)
         pad = length(w2i)
-        seq = map(i -> pad * ones(Int, nsamples), [1:longest...])
+        seq = pad*ones(nsamples,longest+1)
         for i = 1:nsamples
-            map!(t->seq[t][i] = samples[i][t], [1:length(samples[i])...])
+            map!(t->seq[i,t] = samples[i][t], [1:length(samples[i])...])
         end
-        push!(batches, (seq, nwords))
+        push!(batches, (convert(Array{Int64}, seq), nwords))
     end
     return batches
-end
-
-# initialize hidden and cell arrays
-function initstate(atype, hidden, batchsize)
-    state = Array(Any, 2)
-    state[1] = zeros(hidden, batchsize)
-    state[2] = zeros(hidden, batchsize)
-    return map(s->convert(atype,s), state)
 end
 
 # initialize all weights of the language model
@@ -146,69 +133,46 @@ end
 # w[3:4] => weight/bias params for softmax layer
 # w[5]   => word embeddings
 function initweights(atype, hidden, vocab, embed, winit=0.01)
-    w = Array(Any, 5)
+    w = Array(Any, 4)
     input = embed
-    w[1] = winit*randn(4*hidden, hidden+input)
-    w[2] = zeros(4*hidden, 1)
-    w[2][1:hidden] = 1 # forget gate bias
-    w[3] = winit*randn(vocab+1, hidden)
-    w[4] = zeros(vocab+1, 1)
-    w[5] = winit*randn(embed, vocab+1)
-    return map(i->convert(atype, i), w)
+
+    # rnn
+    # w[1] = winit*randn(4*hidden, hidden+input)
+    # w[2] = zeros(4*hidden, 1)
+    # w[2][1:hidden] = 1 # forget gate bias
+    srnn,wrnn = rnninit(input,hidden)
+    w[1] = wrnn
+
+    # softmax
+    w[2] = convert(atype, winit*randn(vocab+1, hidden))
+    w[3] = convert(atype, zeros(vocab+1, 1))
+
+    # embed
+    w[4] = convert(atype, winit*randn(embed, vocab+1))
+    return w, srnn
 end
 
-# LSTM model -i nput * weight, concatenated weights
-function lstm(weight, bias, hidden, cell, input)
-    gates   = weight * vcat(hidden,input) .+ bias
-    hsize   = size(hidden,1)
-    forget  = sigm(gates[1:hsize,:])
-    ingate  = sigm(gates[1+hsize:2hsize,:])
-    outgate = sigm(gates[1+2hsize:3hsize,:])
-    change  = tanh(gates[1+3hsize:end,:])
-    cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
-    return (hidden,cell)
+function predict(ws,xs,srnn,hx=nothing,cx=nothing)
+    wx = ws[4]; r = srnn; wr = ws[1]; wy = ws[2]; by = ws[3]
+
+    x = wx[:,xs]
+    y, hy, cy = rnnforw(r,wr,x,hx,cx)
+    y2 = reshape(y,size(y,1),size(y,2)*size(y,3))
+    return wy*y2.+by, hy, cy
 end
 
-# LSTM prediction
-function predict(w, s, x)
-    emb = w[5][:,x] # size(w[5]): ExV
-    (s[1],s[2]) = lstm(w[1],w[2],s[1],s[2],emb)
-    return w[3] * s[1] .+ w[4]
+function loss(w,seq,srnn,h=nothing,c=nothing)
+    x = seq[:,1:end-1]; y = seq[:,2:end]
+    py,hy,cy = predict(w,x,srnn,h,c)
+    return nll(py,y; average=false)
 end
 
-function logprob(output, ypred)
-    nrows,ncols = size(ypred)
-    index = output + nrows*(0:(length(output)-1))
-    o1 = logp(ypred,1)
-    o2 = o1[index]
-    o3 = sum(o2)
-    return o3
-end
+lossgradient = gradloss(loss)
 
-# LM loss function
-function loss(w, s, seq, values=[])
-    total = 0
-    atype = typeof(AutoGrad.getval(w[1]))
-    input = seq[1]
-    for t in 1:length(seq)-1
-        ypred = predict(w, s, input)
-        ygold = seq[t+1]
-        total += logprob(ygold,ypred)
-        input = ygold
-    end
-
-    push!(values, AutoGrad.getval(-total))
-    return -total
-end
-
-lossgradient = grad(loss)
-
-function train!(w,s,seq,opt)
-    values = []
-    gloss = lossgradient(w, copy(s), seq, values)
+function train!(w,seq,opt,srnn,h=nothing,c=nothing)
+    gloss,lossval = lossgradient(w,seq,srnn,h,c)
     update!(w, gloss, opt)
-    values[1]
+    return lossval
 end
 
 if VERSION >= v"0.5.0-dev+7720"
