@@ -57,10 +57,9 @@ function main(args)
     !haskey(w2i, UNK) && error("...")
 
     # build model
-    w = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
+    w, srnn = initweights(atype, o[:HIDDEN_SIZE], length(w2i), length(t2i),
                     o[:MLP_SIZE], o[:EMBED_SIZE])
-    s = initstate(atype, o[:HIDDEN_SIZE], o[:batchsize])
-    opt = map(x->Adam(), w)
+    opt = optimizers(w, Adam)
 
     # train bilstm tagger
     println("nwords=$nwords, ntags=$ntags"); flush(STDOUT)
@@ -82,11 +81,11 @@ function main(args)
                 dev_start = now()
                 good_sent = bad_sent = good = bad = 0.0
                 for sent in tst
-                    seq = make_input(sent, w2i)
+                    x = make_input(sent, w2i)
+                    ygold = make_output(sent, t2i)
                     nwords = length(sent)
-                    ypred = predict(w, copy(s), seq)
-                    ypred = map(x->i2t[x], predict(w,copy(s),seq))
-                    ygold = map(x -> x[2], sent)
+                    ypred = predict(w, x, srnn)
+                    # TODO: fix accuracy
                     same = true
                     for (y1,y2) in zip(ypred, ygold)
                         if y1 == y2
@@ -114,10 +113,10 @@ function main(args)
             end
 
             # train on minibatch
-            seq = make_input(trn[k], w2i)
-            out = make_output(trn[k], t2i)
+            x = make_input(trn[k], w2i)
+            y = make_output(trn[k], t2i)
 
-            batch_loss = train!(w,s,seq,out,opt)
+            batch_loss = train!(w,x,y,srnn,opt)
             this_loss += batch_loss
             this_tagged += length(trn[k])
         end
@@ -159,21 +158,17 @@ end
 # make input
 function make_input(sample, w2i)
     nwords = length(sample)
-    return map(i->get(w2i, sample[i][1], w2i[UNK]), [1:nwords...])
+    x = map(i->get(w2i, sample[i][1], w2i[UNK]), [1:nwords...])
+    x = reshape(x,1,length(x))
+    x = convert(Array{Int64}, x)
 end
 
 # make output
 function make_output(sample, t2i)
     nwords = length(sample)
-    return map(i->t2i[sample[i][2]], [1:nwords...])
-end
-
-# initialize hidden and cell arrays
-function initstate(atype, hidden, batchsize)
-    state = Array(Any, 2)
-    state[1] = zeros(hidden, batchsize)
-    state[2] = zeros(hidden, batchsize)
-    return map(s->convert(atype,s), state)
+    y = map(i->t2i[sample[i][2]], [1:nwords...])
+    y = reshape(y,1,length(y))
+    y = convert(Array{Int64}, y)
 end
 
 # initialize all weights of the language model
@@ -182,86 +177,34 @@ end
 # w[5:8] => weight/bias params for MLP network
 # w[9]   => word embeddings
 function initweights(atype, hidden, words, tags, embed, mlp, winit=0.01)
-    w = Array(Any, 9)
+    w = Array(Any, 6)
     input = embed
-    w[1] = winit*randn(4*hidden, input+hidden)
-    w[2] = zeros(4*hidden, 1)
-    w[2][1:hidden] = 1
-    w[3] = winit*randn(4*hidden, input+hidden)
-    w[4] = zeros(4*hidden, 1)
-    w[4][1:hidden] = 1
-    w[5] = winit*randn(mlp, 2*hidden)
-    w[6] = zeros(mlp, 1)
-    w[7] = winit*randn(tags, mlp)
-    w[8] = winit*randn(tags, 1)
-    w[9] = winit*randn(embed, words)
-    return map(i->convert(atype, i), w)
-end
-
-# LSTM model - input * weight, concatenated weights
-function lstm(weight, bias, hidden, cell, input)
-    gates   = weight * vcat(hidden,input) .+ bias
-    hsize   = size(hidden,1)
-    forget  = sigm(gates[1:hsize,:])
-    ingate  = sigm(gates[1+hsize:2hsize,:])
-    outgate = sigm(gates[1+2hsize:3hsize,:])
-    change  = tanh(gates[1+3hsize:end,:])
-    cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
-    return (hidden,cell)
+    srnn, wrnn = rnninit(input, hidden; bidirectional=true)
+    w[1] = wrnn
+    w[2] = convert(atype, winit*randn(mlp, 2*hidden))
+    w[3] = convert(atype, zeros(mlp, 1))
+    w[4] = convert(atype, winit*randn(tags, mlp))
+    w[5] = convert(atype, winit*randn(tags, 1))
+    w[6] = convert(atype, winit*randn(embed, words))
+    return w, srnn
 end
 
 # loss function
-function loss(w, s, seq, out, values=[])
-    # encoder
-    sfs, sbs = encoder(w,s,seq)
-
-    # prediction
-    atype = typeof(AutoGrad.getval(w[1]))
-    total = 0
-    rng = 1:length(seq)
-    for t in rng
-        x = w[5] * vcat(sfs[t], sbs[t]) .+ w[6]
-        ypred = w[7] * x .+ w[8]
-        ygold = reshape(out[t:t], 1, 1)
-        total += logprob(ygold,ypred)
-    end
-
-    push!(values, AutoGrad.getval(-total))
-    return -total
+function loss(w, x, ygold, srnn, h=nothing, c=nothing)
+    py, _ = predict(w,x,srnn,h,c)
+    return nll(py,ygold)
 end
 
-# bilstm encoder
-function encoder(w,s,seq)
-    atype = typeof(AutoGrad.getval(w[1]))
-
-    # states and state histories
-    sf, sb = copy(s), copy(s)
-    sfs = Array(Any, length(seq))
-    sbs = Array(Any, length(seq))
-
-    # embedding
-    subembed = w[9][:,seq]
-    embed = Array(Any, length(seq))
-    for k = 1:size(subembed,2)
-        x = subembed[:,k]
-        x = reshape(x, length(x), 1)
-        embed[k] = x
-    end
-
-    # encoding
-    rng = 1:length(seq)
-    for (ft,bt) in zip(rng,reverse(rng))
-        # forward LSTM
-        (sf[1],sf[2]) = lstm(w[1],w[2],sf[1],sf[2],embed[ft])
-        sfs[ft] = copy(sf[1])
-
-        # backward LSTM
-        (sb[1],sb[2]) = lstm(w[3],w[4],sb[1],sb[2],embed[bt])
-        sbs[bt] = copy(sb[1])
-    end
-
-    (sfs, sbs)
+function predict(ws,xs,srnn,hx=nothing,cx=nothing)
+    wx = ws[6]
+    r = srnn; wr = ws[1]
+    wmlp = ws[2]; bmlp = ws[3];
+    wy = ws[4]; by = ws[5]
+    x = wx[:,xs]
+    y, hy, cy = rnnforw(r,wr,x,hx,cx)
+    y2 = reshape(y,size(y,1),size(y,2)*size(y,3))
+    y3 = wmlp * y2 .+ bmlp
+    return wy*y3.+by, hy, cy
 end
 
 function logprob(output, ypred)
@@ -273,38 +216,12 @@ function logprob(output, ypred)
     return o3
 end
 
-# tag given input sentence
-function predict(w,s,seq)
-    # encoder
-    sfs, sbs = encoder(w,s,seq)
+lossgradient = gradloss(loss)
 
-    # prediction
-    tags = []
-    atype = typeof(AutoGrad.getval(w[1]))
-    rng = 1:length(seq)
-    for t in rng
-        x = w[5] * vcat(sfs[t], sbs[t]) .+ w[6]
-        ypred = w[7] * x .+ w[8]
-        ypred = convert(Array{Float32}, ypred)[:]
-        push!(tags, indmax(ypred))
-    end
-
-    tags
-end
-
-lossgradient = grad(loss)
-
-function train!(w,s,seq,tags,opt)
-    values = []
-    gloss = lossgradient(w, copy(s), seq, tags, values)
-    for k = 1:length(w)
-        update!(w[k], gloss[k], opt[k])
-    end
-    isa(s,Vector{Any}) || error("State should not be Boxed.")
-    for k = 1:length(s)
-        s[k] = AutoGrad.getval(s[k])
-    end
-    values[1]
+function train!(w,x,y,srnn,opt,h=nothing,c=nothing)
+    gloss, lossval = lossgradient(w, x, y, srnn)
+    update!(w,gloss,opt)
+    return lossval*size(x,2)
 end
 
 if VERSION >= v"0.5.0-dev+7720"

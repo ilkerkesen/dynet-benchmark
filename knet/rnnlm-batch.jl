@@ -158,7 +158,6 @@ end
 
 function predict(ws,xs,srnn,hx=nothing,cx=nothing)
     wx = ws[4]; r = srnn; wr = ws[1]; wy = ws[2]; by = ws[3]
-
     x = wx[:,xs]
     y, hy, cy = rnnforw(r,wr,x,hx,cx)
     y2 = reshape(y,size(y,1),size(y,2)*size(y,3))
