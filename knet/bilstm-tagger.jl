@@ -201,19 +201,10 @@ function predict(ws,xs,srnn,hx=nothing,cx=nothing)
     wmlp = ws[2]; bmlp = ws[3];
     wy = ws[4]; by = ws[5]
     x = wx[:,xs]
-    y, hy, cy = rnnforw(r,wr,x,hx,cx)
+    y, hy, cy = rnnforw(r,wr,x)
     y2 = reshape(y,size(y,1),size(y,2)*size(y,3))
     y3 = wmlp * y2 .+ bmlp
     return wy*y3.+by, hy, cy
-end
-
-function logprob(output, ypred)
-    nrows,ncols = size(ypred)
-    index = output + nrows*(0:(length(output)-1))
-    o1 = logp(ypred,1)
-    o2 = o1[index]
-    o3 = sum(o2)
-    return o3
 end
 
 lossgradient = gradloss(loss)
