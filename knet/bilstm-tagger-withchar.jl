@@ -66,7 +66,6 @@ function main(args)
     # build model
     w, srnns = initweights(atype, o[:HIDDEN_SIZE], length(w2i), ntags, nchars,
                            o[:WEMBED_SIZE], o[:CEMBED_SIZE], o[:MLP_SIZE])
-    s = initstate(atype, o[:HIDDEN_SIZE], o[:WEMBED_SIZE])
     opt = optimizers(w, Adam)
 
     # train bilstm tagger
@@ -89,9 +88,9 @@ function main(args)
                 dev_start = now()
                 good_sent = bad_sent = good = bad = 0.0
                 for sent in tst
-                    seq, is_word = make_input(sent, w2i, c2i)
+                    input = make_input(sent, w2i, c2i)
                     nwords = length(sent)
-                    ypred,_ = predict(w, seq, is_word, srnns)
+                    ypred,_ = predict(w, input, srnns)
                     ypred = map(x->i2t[x], mapslices(indmax,Array(ypred),1))
                     ygold = map(x -> x[2], sent)
                     same = true
@@ -121,9 +120,9 @@ function main(args)
             end
 
             # train with instance
-            seq, is_word = make_input(trn[k],w2i,c2i)
+            input = make_input(trn[k],w2i,c2i)
             out = make_output(trn[k],t2i)
-            batch_loss = train!(w,seq,is_word,out,srnns,opt)
+            batch_loss = train!(w,input,out,srnns,opt)
             this_loss += batch_loss
             this_tagged += length(trn[k])
         end
@@ -174,21 +173,33 @@ function make_input(sample, w2i, c2i)
             push!(seq, convert(Array{Int32}, map(c->c2i[c], chars)))
         end
     end
-    (seq,is_word)
+
+    # construct rare word block - it's for efficiency
+    rare_words = filter(x->isa(x,Array), seq)
+    sort!(rare_words, by=x->length(x), rev=true)
+    longest = length(rare_words) != 0 ? length(rare_words[1]) : 0
+    rblock = Int32[]
+    batchsizes = zeros(Int32, longest)
+    for t = 1:longest
+        for i = 1:length(rare_words)
+            length(rare_words[i]) < t && break
+            push!(rblock, rare_words[i][t])
+            batchsizes[t] += 1
+        end
+    end
+
+    cinds = find(is_word)
+    rinds = find(!is_word)
+    cwords = seq[is_word]
+    cwords = reshape(cwords, 1, length(cwords))
+    cwords = convert(Array{Int32}, cwords)
+    rwords = rblock
+
+    return (cwords, cinds, rwords, rinds, vec(batchsizes))
 end
 
 function make_output(sample,t2i)
     map(s->t2i[s[2]], sample)
-end
-
-# initialize hidden and cell arrays
-function initstate(atype, hidden, wembed, batchsize=1)
-    state = Array(Any, 4)
-    state[1] = zeros(hidden, batchsize)
-    state[2] = zeros(hidden, batchsize)
-    state[3] = zeros(div(wembed,2), batchsize)
-    state[4] = zeros(div(wembed,2), batchsize)
-    return map(s->convert(atype,s), state)
 end
 
 # init LSTM parameters
@@ -223,15 +234,16 @@ function initweights(
 end
 
 # loss function
-function loss(w, seq, is_word, ygold, srnns)
-    py, _ = predict(w,seq,is_word,srnns)
+function loss(w, input, ygold, srnns)
+    py, _ = predict(w,input,srnns)
     return nll(py,ygold)
 end
 
 lossgradient = gradloss(loss)
 
-function predict(w,seq,is_word,srnns)
-    x = encoder(w,seq,is_word,srnns[2])
+function predict(w,input,srnns)
+    x = encoder(w,input,srnns[2])
+    x = reshape(x, size(x,1), 1, size(x,2))
     r = srnns[1]; wr = w[1]
     wmlp, bmlp = w[3], w[4]
     wy, by = w[5], w[6]
@@ -242,36 +254,32 @@ function predict(w,seq,is_word,srnns)
 end
 
 # encoder - it generates embeddings
-function encoder(w,seq,is_word,srnn)
-    # embedding
-    embed = Array{Any}(length(seq))
-    inds = convert(Array{Int32}, seq[is_word])
-    wembed = w[end-1][:,inds]
-    wi = 1
-    wr = w[2]; r = srnn
+function encoder(w,input,srnn)
+    # expand input tuple
+    cwords, cinds, rwords, rinds, bs = input
 
-    for k = 1:length(seq)
-        if is_word[k] # common word embed
-            embed[k] = wembed[:,wi:wi]
-            wi += 1
-        else # rare word embed
-            inds = seq[k]
-            inds = reshape(inds, 1, length(inds))
-            cembed = w[end][:,inds]
-            y, hy, cy = rnnforw(r,wr,cembed; hy=true, cy=true)
-            embed[k] = reshape(hy, length(hy), 1)
-        end
-    end
-    embed = hcat(embed...)
-    embed = reshape(embed, size(embed,1), 1, size(embed,2))
+    # common words' embedding
+    cembed = w[end-1][:,cwords]
+    cembed = reshape(cembed, size(cembed,1), size(cembed)[end])
+    length(rinds) == 0 && return cembed
+
+    r = srnn; wr = w[2]
+    c0 = w[end][:,rwords]
+    y, hy, cy = rnnforw(r,wr,c0; hy=true, cy=true, batchSizes=bs)
+    r0 = permutedims(hy, (3,1,2))
+    rembed = reshape(r0, size(r0,1)*size(r0,2), size(r0,3))
+
+    e0 = hcat(cembed, rembed)
+    e1 = e0[:,[cinds...,rinds...]]
+    return e1
 end
 
-function train!(w,seq,is_word,ygold,srnns,opt)
-    gloss, lossval = lossgradient(w, seq, is_word, ygold, srnns)
+function train!(w,input,ygold,srnns,opt)
+    gloss, lossval = lossgradient(w, input, ygold, srnns)
     for k = 1:length(w)
         gloss[k] != nothing && update!(w[k], gloss[k], opt[k])
     end
-    return lossval*length(seq)
+    return lossval*(length(input[2])+length(input[4]))
 end
 
 if VERSION >= v"0.5.0-dev+7720"
