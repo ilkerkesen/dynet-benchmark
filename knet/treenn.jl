@@ -234,11 +234,11 @@ function lstm(w,ind)
     x = w[end][ind:ind,:]
     hsize = size(x,2)
     gates = x * w[1] .+ w[2]
-    i = sigm(gates[:,1:hsize])
-    o = sigm(gates[:,1+hsize:2hsize])
-    u = sigm(gates[:,1+2hsize:3hsize])
+    i = sigm.(gates[:,1:hsize])
+    o = sigm.(gates[:,1+hsize:2hsize])
+    u = sigm.(gates[:,1+2hsize:3hsize])
     c = i .* u
-    h = o .* tanh(c)
+    h = o .* tanh.(c)
     return (h,c)
 end
 
@@ -246,13 +246,13 @@ function slstm(w,h1,h2,c1,c2)
     hsize = size(h1,2)
     h = hcat(h1,h2)
     gates = h * w[3] .+ w[4]
-    i  = sigm(gates[:,1:hsize])
-    o  = sigm(gates[:,1+hsize:2hsize])
-    u  = sigm(gates[:,1+2hsize:3hsize])
-    f1 = sigm(h1 * w[5] .+ w[7])
-    f2 = sigm(h2 * w[6] .+ w[7])
+    i  = sigm.(gates[:,1:hsize])
+    o  = sigm.(gates[:,1+hsize:2hsize])
+    u  = sigm.(gates[:,1+2hsize:3hsize])
+    f1 = sigm.(h1 * w[5] .+ w[7])
+    f2 = sigm.(h2 * w[6] .+ w[7])
     c  = i .* u + f1 .* c1 .+ f2 .* c2
-    h  = o .* tanh(c)
+    h  = o .* tanh.(c)
     return (h,c)
 end
 
