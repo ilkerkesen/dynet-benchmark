@@ -63,7 +63,7 @@ function main(args=ARGS)
                 dev_loss = dev_words = 0
                 for i = 1:length(tst)
                     x, y, nwords = tst[i]
-                    dev_loss += loss(w,x,y,srnn)
+                    dev_loss += loss(w,x,y,srnn)*nwords
                     dev_words += nwords
                 end
                 dev_time += Int(now()-dev_start)*0.001
@@ -82,7 +82,7 @@ function main(args=ARGS)
             # train on minibatch
             x, y, batch_words = trn[k]
             batch_loss = train!(w,x,y,opt,srnn)
-            this_loss += batch_loss
+            this_loss += batch_loss*batch_words
             this_words += batch_words
         end
         @printf("epoch %d finished\n", epoch-1); flush(STDOUT)
@@ -166,7 +166,7 @@ end
 
 function loss(w,x,y,srnn,h=nothing,c=nothing)
     py,hy,cy = predict(w,x,srnn,h,c)
-    return nll(py,y; average=false)
+    return nll(py,y; average=true)
 end
 
 lossgradient = gradloss(loss)

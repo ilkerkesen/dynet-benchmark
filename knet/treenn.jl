@@ -235,11 +235,11 @@ function lstm(w,ind)
     x = reshape(x, length(x), 1)
     hsize = size(x,1)
     gates = w[1] * x .+ w[2]
-    i = sigm(gates[1:hsize,:])
-    o = sigm(gates[1+hsize:2hsize,:])
-    u = sigm(gates[1+2hsize:3hsize,:])
+    i = sigm.(gates[1:hsize,:])
+    o = sigm.(gates[1+hsize:2hsize,:])
+    u = sigm.(gates[1+2hsize:3hsize,:])
     c = i .* u
-    h = o .* tanh(c)
+    h = o .* tanh.(c)
     return (h,c)
 end
 
@@ -247,13 +247,13 @@ function slstm(w,h1,h2,c1,c2)
     hsize = size(h1,1)
     h = vcat(h1,h2)
     gates = w[3] * h .+ w[4]
-    i  = sigm(gates[1:hsize,:])
-    o  = sigm(gates[1+hsize:2hsize,:])
-    u  = sigm(gates[1+2hsize:3hsize,:])
-    f1 = sigm(w[5] * h1 .+ w[7])
-    f2 = sigm(w[6] * h2 .+ w[7])
+    i  = sigm.(gates[1:hsize,:])
+    o  = sigm.(gates[1+hsize:2hsize,:])
+    u  = sigm.(gates[1+2hsize:3hsize,:])
+    f1 = sigm.(w[5] * h1 .+ w[7])
+    f2 = sigm.(w[6] * h2 .+ w[7])
     c  = i .* u .+ f1 .* c1 .+ f2 .* c2
-    h  = o .* tanh(c)
+    h  = o .* tanh.(c)
     return (h,c)
 end
 
