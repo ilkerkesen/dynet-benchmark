@@ -29,7 +29,7 @@ function main(args)
 
     isa(args, AbstractString) && (args=split(args))
     o = parse_args(args, s; as_symbols=true)
-    o[:seed] > 0 && srand(o[:seed])
+    o[:seed] > 0 && Knet.setseed(o[:seed])
     atype = o[:gpu] ? KnetArray{Float32} : Array{Float32}
 
     # read data
