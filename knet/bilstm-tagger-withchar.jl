@@ -229,12 +229,12 @@ function lstm(weight, bias, hidden, cell, input)
     # info("size(weight): ", size(weight), " size(bias): ", size(bias))
     gates   = weight * vcat(hidden,input) .+ bias
     hsize   = size(hidden,1)
-    forget  = sigm(gates[1:hsize,:])
-    ingate  = sigm(gates[1+hsize:2hsize,:])
-    outgate = sigm(gates[1+2hsize:3hsize,:])
-    change  = tanh(gates[1+3hsize:end,:])
+    forget  = sigm.(gates[1:hsize,:])
+    ingate  = sigm.(gates[1+hsize:2hsize,:])
+    outgate = sigm.(gates[1+2hsize:3hsize,:])
+    change  = tanh.(gates[1+3hsize:end,:])
     cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
+    hidden  = outgate .* tanh.(cell)
     return (hidden,cell)
 end
 
