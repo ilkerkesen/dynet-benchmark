@@ -183,11 +183,11 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, wembed, batchsize=1)
     state = Array(Any, 4)
-    state[1] = zeros(hidden, batchsize)
-    state[2] = zeros(hidden, batchsize)
-    state[3] = zeros(div(wembed,2), batchsize)
-    state[4] = zeros(div(wembed,2), batchsize)
-    return map(s->convert(atype,s), state)
+    state[1] = convert(atype, zeros(hidden, batchsize))
+    state[2] = convert(atype, zeros(hidden, batchsize))
+    state[3] = convert(atype, zeros(div(wembed,2), batchsize))
+    state[4] = convert(atype, zeros(div(wembed,2), batchsize))
+    return state
 end
 
 # init LSTM parameters
