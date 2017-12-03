@@ -183,11 +183,11 @@ end
 # initialize hidden and cell arrays
 function initstate(atype, hidden, wembed, batchsize=1)
     state = Array(Any, 4)
-    state[1] = zeros(batchsize, hidden)
-    state[2] = zeros(batchsize, hidden)
-    state[3] = zeros(batchsize, div(wembed,2))
-    state[4] = zeros(batchsize, div(wembed,2))
-    return map(s->convert(atype,s), state)
+    state[1] = convert(atype, zeros(batchsize, hidden))
+    state[2] = convert(atype, zeros(batchsize, hidden))
+    state[3] = convert(atype, zeros(batchsize, div(wembed,2)))
+    state[4] = convert(atype, zeros(batchsize, div(wembed,2)))
+    return state
 end
 
 # init LSTM parameters
@@ -227,12 +227,12 @@ end
 function lstm(weight, bias, hidden, cell, input)
     gates   = hcat(input,hidden) * weight .+ bias
     hsize   = size(hidden,2)
-    forget  = sigm(gates[:,1:hsize])
-    ingate  = sigm(gates[:,1+hsize:2hsize])
-    outgate = sigm(gates[:,1+2hsize:3hsize])
-    change  = tanh(gates[:,1+3hsize:end])
+    forget  = sigm.(gates[:,1:hsize])
+    ingate  = sigm.(gates[:,1+hsize:2hsize])
+    outgate = sigm.(gates[:,1+2hsize:3hsize])
+    change  = tanh.(gates[:,1+3hsize:end])
     cell    = cell .* forget + ingate .* change
-    hidden  = outgate .* tanh(cell)
+    hidden  = outgate .* tanh.(cell)
     return (hidden,cell)
 end
 
